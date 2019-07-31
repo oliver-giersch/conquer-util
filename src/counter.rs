@@ -1,7 +1,10 @@
-use std::mem;
-use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread::{self, ThreadId};
+
+use crate::THREAD_ID;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// ThreadCounter
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
 pub struct ThreadCounter {
     size: usize,
@@ -19,12 +22,14 @@ impl ThreadCounter {
     }
 
     #[inline]
-    pub fn increment(&self) {
-        let idx =
-            unsafe { mem::transmute::<_, NonZeroU64>(thread::current().id()).get() - 1 } as usize;
-        assert!(idx < self.size);
+    pub fn increment(&self, order: Ordering) {
+        let idx = THREAD_ID.with(|id| id.get());
+        assert!(
+            idx < self.size,
+            "more threads than the specified `max_threads` attempted to access the ThreadCounter"
+        );
 
-        self.counters[idx].0.fetch_add(1, Ordering::Relaxed);
+        self.counters[idx].0.fetch_add(1, order);
     }
 
     #[inline]
