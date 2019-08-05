@@ -6,6 +6,7 @@ use crate::THREAD_ID;
 // ThreadCounter
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+/// TODO: Docs...
 pub struct ThreadCounter {
     size: usize,
     counters: Box<[Count]>,
@@ -14,12 +15,14 @@ pub struct ThreadCounter {
 /********** impl inherent *************************************************************************/
 
 impl ThreadCounter {
+    /// TODO: Docs...
     #[inline]
     pub fn new(max_threads: usize) -> Self {
         assert!(max_threads > 0);
         Self { size: max_threads, counters: (0..max_threads).map(|_| Default::default()).collect() }
     }
 
+    /// TODO: Docs...
     #[inline]
     pub fn update(&self, func: impl FnOnce(usize) -> usize) {
         let idx = self.index();
@@ -27,6 +30,7 @@ impl ThreadCounter {
         self.counters[idx].0.store(func(curr), Ordering::Relaxed);
     }
 
+    /// TODO: Docs...
     #[inline]
     fn index(&self) -> usize {
         let idx = THREAD_ID.with(|id| id.get());
@@ -51,6 +55,7 @@ impl IntoIterator for ThreadCounter {
 // IntoIter
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+/// TODO: Docs...
 pub struct IntoIter {
     idx: usize,
     counter: ThreadCounter,

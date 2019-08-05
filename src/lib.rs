@@ -1,4 +1,9 @@
-#![deny(unsafe_code)]
+//! TODO: Docs...
+
+#![deny(missing_docs, unsafe_code)]
+
+/// TODO: Docs...
+pub mod align;
 
 mod backoff;
 mod counter;
