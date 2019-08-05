@@ -7,7 +7,12 @@ const SPIN_LIMIT_POW: u32 = 6;
 // BackOff
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-/// TODO: Docs...
+/// A type for exponential back-off in loops.
+///
+/// In concurrent environments it can often be beneficial to back off from
+/// accessing shared variables in loops in order to reduce contention and
+/// improve performance for all participating threads by spinning for a short
+/// amount of time.
 #[derive(Clone, Debug, Default, Hash, Eq, Ord, PartialEq, PartialOrd)]
 pub struct BackOff {
     pow: u32,
@@ -16,19 +21,21 @@ pub struct BackOff {
 /********** impl inherent *************************************************************************/
 
 impl BackOff {
-    /// TODO: Docs...
+    /// Creates a new [`BackOff`] instance.
     #[inline]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// TODO: Docs...
+    /// Resets the [`BackOff`] instance to its initial state.
     #[inline]
     pub fn reset(&mut self) {
         self.pow = 0;
     }
 
-    /// TODO: Docs...
+    /// Spins for a bounded number of steps
+    ///
+    /// On processors that support such instructions, each step ...
     #[inline]
     pub fn spin(&mut self) {
         let pow = self.pow;
@@ -53,5 +60,14 @@ impl BackOff {
     #[inline]
     pub fn advise_yield(&self) -> bool {
         self.pow == SPIN_LIMIT_POW
+    }
+}
+
+/********** impl Display **************************************************************************/
+
+impl fmt::Display for BackOff {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        unimplemented!()
     }
 }

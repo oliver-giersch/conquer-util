@@ -8,3 +8,7 @@ edition = "2018"
 align = []
 backoff = []
 counter = []
+
+[[bench]]
+name = "backoff"
+required-features = ["backoff"]
