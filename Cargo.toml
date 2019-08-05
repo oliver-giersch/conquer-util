@@ -5,9 +5,12 @@ authors = ["Oliver Giersch <oliver.giersch@b-tu.de>"]
 edition = "2018"
 
 [features]
-align = []
+default = ["std"]
+
+align   = []
 backoff = []
-counter = []
+counter = ["std", "align"]
+std     = []
 
 [[bench]]
 name = "backoff"

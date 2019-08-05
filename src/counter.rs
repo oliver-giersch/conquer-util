@@ -1,4 +1,7 @@
+use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use crate::align::CacheAligned;
 
 use crate::THREAD_ID;
 
@@ -9,7 +12,7 @@ use crate::THREAD_ID;
 /// TODO: Docs...
 pub struct ThreadCounter {
     size: usize,
-    counters: Box<[Count]>,
+    counters: Box<[CacheAligned<AtomicUsize>]>,
 }
 
 /********** impl inherent *************************************************************************/
@@ -32,6 +35,12 @@ impl ThreadCounter {
 
     /// TODO: Docs...
     #[inline]
+    pub fn iter(&mut self) -> Iter {
+        Iter { idx: 0, counter: self }
+    }
+
+    /// TODO: Docs...
+    #[inline]
     fn index(&self) -> usize {
         let idx = THREAD_ID.with(|id| id.get());
         assert!(idx < self.size, "`max_threads` exceeded");
@@ -48,6 +57,42 @@ impl IntoIterator for ThreadCounter {
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
         IntoIter { idx: 0, counter: self }
+    }
+}
+
+/********** impl Debug ****************************************************************************/
+
+impl fmt::Debug for ThreadCounter {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("ThreadCounter").field("max_threads", &self.size).finish()
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Iter
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// TODO: Docs...
+pub struct Iter<'a> {
+    idx: usize,
+    counter: &'a mut ThreadCounter,
+}
+
+/********** impl Iterator *************************************************************************/
+
+impl Iterator for Iter<'_> {
+    type Item = usize;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let idx = self.idx;
+        if idx == self.counter.size {
+            None
+        } else {
+            self.idx += 1;
+            Some(self.counter.counters[idx].0.load(Ordering::Relaxed))
+        }
     }
 }
 
@@ -78,16 +123,11 @@ impl Iterator for IntoIter {
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// Count
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-#[repr(align(128))]
-#[derive(Default)]
-struct Count(AtomicUsize);
-
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::thread;
+
     use super::ThreadCounter;
 
     #[test]
@@ -95,5 +135,27 @@ mod tests {
         let counter = ThreadCounter::new(8);
         let sum: usize = counter.into_iter().sum();
         assert_eq!(sum, 0usize);
+    }
+
+    #[test]
+    fn sum_after_join() {
+        const THREADS: usize = 4;
+
+        let counter = Arc::new(ThreadCounter::new(4));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|id| {
+                let counter = Arc::clone(&counter);
+                thread::spawn(move || {
+                    counter.update(|_| id);
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let counter = Arc::try_unwrap(counter).unwrap();
+        assert_eq!((0..THREADS).sum::<usize>(), counter.into_iter().sum());
     }
 }

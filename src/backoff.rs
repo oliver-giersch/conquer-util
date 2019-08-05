@@ -35,7 +35,16 @@ impl BackOff {
 
     /// Spins for a bounded number of steps
     ///
-    /// On processors that support such instructions, each step ...
+    /// On CPUs that support such instructions, in each step the processor will
+    /// be instructed to deliberately slow down, e.g. using the `pause`
+    /// instruction on x86, which can also save energy.
+    ///
+    /// Each invocation of this method exponentially increases the number of
+    /// spin cycles until a point at which further spinning is no longer
+    /// advisable and other strategies, such as yielding the current thread to
+    /// the OS, should be preferred.
+    /// From this point on, the number of spin cycles remains constant with each
+    /// further invocation of [`spin`][BackOff::spin].
     #[inline]
     pub fn spin(&mut self) {
         let pow = self.pow;
@@ -57,9 +66,27 @@ impl BackOff {
     }
 
     /// TODO: Docs...
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use conquer_util::BackOff;
+    ///
+    /// let mut backoff = BackOff::new();
+    /// while !backoff.advise_yield() {
+    ///     backoff.spin();
+    /// }
+    /// ```
     #[inline]
     pub fn advise_yield(&self) -> bool {
         self.pow == SPIN_LIMIT_POW
+    }
+
+    #[cfg(feature = "std")]
+    /// TODO: Docs...
+    #[inline]
+    pub fn yield_now(&self) {
+        std::thread::yield_now();
     }
 }
 
