@@ -23,3 +23,11 @@ fn spin_full(b: &mut Bencher) {
         }
     })
 }
+
+#[bench]
+fn spin_for(b: &mut Bencher) {
+    b.iter(|| {
+        use std::time::Duration;
+        BackOff::spin_for(Duration::from_nanos(100));
+    })
+}
