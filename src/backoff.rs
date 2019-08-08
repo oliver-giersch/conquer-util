@@ -5,7 +5,9 @@
 #[cfg(feature = "std")]
 use std::time::{Duration, Instant};
 
+use core::cell::Cell;
 use core::fmt;
+use core::hash::{Hash, Hasher};
 use core::sync::atomic;
 
 const SPIN_LIMIT_POW: u32 = 6;
@@ -20,9 +22,9 @@ const SPIN_LIMIT_POW: u32 = 6;
 /// accessing shared variables in loops in order to reduce contention and
 /// improve performance for all participating threads by spinning for a short
 /// amount of time.
-#[derive(Clone, Default, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct BackOff {
-    pow: u32,
+    pow: Cell<u32>,
 }
 
 /********** impl inherent *************************************************************************/
@@ -36,8 +38,8 @@ impl BackOff {
 
     /// Resets the [`BackOff`] instance to its initial state.
     #[inline]
-    pub fn reset(&mut self) {
-        self.pow = 0;
+    pub fn reset(&self) {
+        self.pow.set(0);
     }
 
     /// Spins for a bounded number of steps
@@ -56,8 +58,8 @@ impl BackOff {
     /// Whether this point has been reached can be determined through the
     /// [`advise_yield`][BackOff::advise_yield] method.
     #[inline]
-    pub fn spin(&mut self) {
-        let pow = self.pow;
+    pub fn spin(&self) {
+        let pow = self.pow.get();
         let limit = 1 << pow;
 
         // this uses a forced function call to prevent optimizing the loop away
@@ -71,7 +73,7 @@ impl BackOff {
         }
 
         if pow < SPIN_LIMIT_POW {
-            self.pow += 1;
+            self.pow.set(pow + 1);
         }
     }
 
@@ -115,11 +117,14 @@ impl BackOff {
     /// to take approximately 500 nanoseconds
     #[inline]
     pub fn advise_yield(&self) -> bool {
-        self.pow == SPIN_LIMIT_POW
+        self.pow.get() == SPIN_LIMIT_POW
     }
 
     #[cfg(feature = "std")]
-    /// TODO: Docs...
+    /// Spins *at least* for the specified `dur`.
+    ///
+    /// If a very short duration is specified, this function may spin for a
+    /// longer, platform-specific minimum time.
     pub fn spin_for(dur: Duration) {
         let now = Instant::now();
         let end = now + dur;
@@ -130,7 +135,10 @@ impl BackOff {
     }
 
     #[cfg(feature = "std")]
-    /// TODO: Docs...
+    /// Cooperatively yields the current thread.
+    ///
+    /// This is merely a convenience wrapper for
+    /// [`thread::yield_now`][std::thread::yield_now]
     #[inline]
     pub fn yield_now() {
         std::thread::yield_now();
@@ -152,5 +160,14 @@ impl fmt::Display for BackOff {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "advise yield: {}", self.advise_yield())
+    }
+}
+
+/********** impl Hash *****************************************************************************/
+
+impl Hash for BackOff {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u32(self.pow.get());
     }
 }

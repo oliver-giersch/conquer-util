@@ -9,7 +9,7 @@ use conquer_util::BackOff;
 #[bench]
 fn spin_once(b: &mut Bencher) {
     b.iter(|| {
-        let mut backoff = BackOff::new();
+        let backoff = BackOff::new();
         backoff.spin();
     })
 }
@@ -17,7 +17,7 @@ fn spin_once(b: &mut Bencher) {
 #[bench]
 fn spin_full(b: &mut Bencher) {
     b.iter(|| {
-        let mut backoff = BackOff::new();
+        let backoff = BackOff::new();
         while !backoff.advise_yield() {
             backoff.spin();
         }
