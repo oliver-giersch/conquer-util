@@ -9,8 +9,6 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::align::CacheAligned;
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // ThreadCounter
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -18,7 +16,7 @@ use crate::align::CacheAligned;
 /// TODO: Docs...
 pub struct ThreadCounter {
     size: usize,
-    counters: Box<[CacheAligned<AtomicUsize>]>,
+    counters: Box<[Counter]>,
     registered_threads: AtomicUsize,
 }
 
@@ -39,21 +37,23 @@ impl ThreadCounter {
         }
     }
 
-    /// TODO: Docs...
-    #[inline]
-    pub fn register_thread(self: Pin<&Self>) -> Result<ThreadToken, RegistryError> {
+    /// TODO:
+    pub fn register_thread<'c>(self: Pin<&'c Self>) -> Result<Token<'c>, RegistryError> {
         let token = self.registered_threads.fetch_add(1, Ordering::Relaxed);
         if token < self.size {
-            Ok(ThreadToken { idx: token, counter: NonNull::from(&*self) })
+            Ok(Token { idx: token, counter: self })
         } else {
             Err(RegistryError(()))
         }
     }
 
-    /// TODO: Docs...
-    #[inline]
-    pub fn update(self: Pin<&Self>, token: ThreadToken, func: impl FnOnce(usize) -> usize) {
-        assert_eq!(token.counter, NonNull::from(&*self), "mismatch between counter and token");
+    /// TODO:
+    pub fn update<'c>(self: Pin<&'c Self>, token: Token<'c>, func: impl FnOnce(usize) -> usize) {
+        assert_eq!(
+            Pin::get_ref(token.counter) as *const _,
+            Pin::get_ref(self) as *const _,
+            "mismatch between counter and token"
+        );
         let curr = self.counters[token.idx].0.load(Ordering::Relaxed);
         self.counters[token.idx].0.store(func(curr), Ordering::Relaxed);
     }
@@ -90,16 +90,15 @@ impl fmt::Debug for ThreadCounter {
 // ThreadToken
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// FIXME: no send, maybe sync?
-// FIXME: copy + clone?
-pub struct ThreadToken {
+#[derive(Copy, Clone)]
+pub struct Token<'c> {
     idx: usize,
-    counter: NonNull<ThreadCounter>,
+    counter: Pin<&'c ThreadCounter>,
 }
 
 /********** impl Debug ****************************************************************************/
 
-impl fmt::Debug for ThreadToken {
+impl fmt::Debug for Token<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         unimplemented!()
     }
@@ -168,6 +167,14 @@ pub struct IntoIter {
 impl Iterator for IntoIter {
     impl_iterator!();
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Counter
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Debug, Default)]
+#[repr(align(128))]
+struct Counter(AtomicUsize);
 
 #[cfg(test)]
 mod tests {
