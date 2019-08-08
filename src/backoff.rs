@@ -1,6 +1,6 @@
-//! Convenience type for ergonomically realizing an exponential back-off
-//! strategy to reduce contention on shared memory and caches in a concurrent
-//! environment.
+//! Convenience type for ergonomically pursuing an exponential back-off busy
+//! waiting strategy in order to reduce contention on shared memory and caches
+//! in a concurrent environment.
 
 #[cfg(feature = "std")]
 use std::time::{Duration, Instant};
