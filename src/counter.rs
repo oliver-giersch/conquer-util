@@ -5,7 +5,6 @@
 use alloc::boxed::Box;
 
 use core::fmt;
-use core::pin::Pin;
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -38,7 +37,7 @@ impl ThreadCounter {
     }
 
     /// TODO:
-    pub fn register_thread<'c>(self: Pin<&'c Self>) -> Result<Token<'c>, RegistryError> {
+    pub fn register_thread(&self) -> Result<Token, RegistryError> {
         let token = self.registered_threads.fetch_add(1, Ordering::Relaxed);
         if token < self.size {
             Ok(Token { idx: token, counter: self })
@@ -48,10 +47,9 @@ impl ThreadCounter {
     }
 
     /// TODO:
-    pub fn update<'c>(self: Pin<&'c Self>, token: Token<'c>, func: impl FnOnce(usize) -> usize) {
+    pub fn update(&self, token: Token, func: impl FnOnce(usize) -> usize) {
         assert_eq!(
-            Pin::get_ref(token.counter) as *const _,
-            Pin::get_ref(self) as *const _,
+            token.counter as *const _, self as *const _,
             "mismatch between counter and token"
         );
         let curr = self.counters[token.idx].0.load(Ordering::Relaxed);
@@ -93,7 +91,7 @@ impl fmt::Debug for ThreadCounter {
 #[derive(Copy, Clone)]
 pub struct Token<'c> {
     idx: usize,
-    counter: Pin<&'c ThreadCounter>,
+    counter: &'c ThreadCounter,
 }
 
 /********** impl Debug ****************************************************************************/
@@ -178,7 +176,6 @@ struct Counter(AtomicUsize);
 
 #[cfg(test)]
 mod tests {
-    use std::pin::Pin;
     use std::sync::Arc;
     use std::thread;
 
@@ -192,28 +189,28 @@ mod tests {
     }
 
     #[test]
-    fn pinned() {
-        const THREADS: usize = 4;
+    #[should_panic]
+    fn token_mismatch() {
+        let counter_a = ThreadCounter::new(1);
+        let counter_b = ThreadCounter::new(1);
 
-        let counter = ThreadCounter::new(THREADS);
-        let pin = Pin::new(&counter);
+        let token_a = counter_a.register_thread().unwrap();
+        let token_b = counter_b.register_thread().unwrap();
 
-        // use e.g. for scoped thread
-
-        let iter = counter.into_iter();
+        counter_a.update(token_b, |curr| curr + 1);
     }
 
     #[test]
     fn sum_after_join() {
         const THREADS: usize = 4;
 
-        let mut counter = Arc::pin(ThreadCounter::new(THREADS));
+        let counter = Arc::new(ThreadCounter::new(THREADS));
         let handles: Vec<_> = (0..THREADS)
             .map(|id| {
-                let counter = counter.clone();
+                let counter = Arc::clone(&counter);
                 thread::spawn(move || {
-                    let token = counter.as_ref().register_thread().unwrap();
-                    counter.as_ref().update(token, |_| id);
+                    let token = counter.register_thread().unwrap();
+                    counter.update(token, |_| id);
                 })
             })
             .collect();
@@ -222,8 +219,7 @@ mod tests {
             handle.join().unwrap();
         }
 
-        //not yet stable
-        //let counter = Arc::get_mut(Pin::into_inner(counter)).unwrap();
-        //assert_eq!((0..THREADS).sum::<usize>(), counter.iter().sum());
+        let counter = Arc::try_unwrap(counter).unwrap();
+        assert_eq!((0..THREADS).sum::<usize>(), counter.into_iter().sum());
     }
 }
