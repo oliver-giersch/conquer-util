@@ -1,9 +1,15 @@
-use std::fmt;
-use std::sync::atomic::{AtomicUsize, Ordering};
+//! Fixed-size wait-free thread local counters with functionality for
+//! eventual aggregation.
+
+#[cfg(not(feature = "std"))]
+use alloc::boxed::Box;
+
+use core::fmt;
+use core::pin::Pin;
+use core::ptr::NonNull;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::align::CacheAligned;
-
-use crate::THREAD_ID;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // ThreadCounter
@@ -13,6 +19,7 @@ use crate::THREAD_ID;
 pub struct ThreadCounter {
     size: usize,
     counters: Box<[CacheAligned<AtomicUsize>]>,
+    registered_threads: AtomicUsize,
 }
 
 /********** impl inherent *************************************************************************/
@@ -21,30 +28,40 @@ impl ThreadCounter {
     /// TODO: Docs...
     #[inline]
     pub fn new(max_threads: usize) -> Self {
-        assert!(max_threads > 0);
-        Self { size: max_threads, counters: (0..max_threads).map(|_| Default::default()).collect() }
+        assert!(
+            max_threads > 0 && max_threads < usize::max_value(),
+            "`max_threads` not within valid bounds"
+        );
+        Self {
+            size: max_threads,
+            counters: (0..max_threads).map(|_| Default::default()).collect(),
+            registered_threads: AtomicUsize::new(0),
+        }
     }
 
     /// TODO: Docs...
     #[inline]
-    pub fn update(&self, func: impl FnOnce(usize) -> usize) {
-        let idx = self.index();
-        let curr = self.counters[idx].0.load(Ordering::Relaxed);
-        self.counters[idx].0.store(func(curr), Ordering::Relaxed);
+    pub fn register_thread(self: Pin<&Self>) -> Result<ThreadToken, RegistryError> {
+        let token = self.registered_threads.fetch_add(1, Ordering::Relaxed);
+        if token < self.size {
+            Ok(ThreadToken { idx: token, counter: NonNull::from(&*self) })
+        } else {
+            Err(RegistryError(()))
+        }
+    }
+
+    /// TODO: Docs...
+    #[inline]
+    pub fn update(self: Pin<&Self>, token: ThreadToken, func: impl FnOnce(usize) -> usize) {
+        assert_eq!(token.counter, NonNull::from(&*self), "mismatch between counter and token");
+        let curr = self.counters[token.idx].0.load(Ordering::Relaxed);
+        self.counters[token.idx].0.store(func(curr), Ordering::Relaxed);
     }
 
     /// TODO: Docs...
     #[inline]
     pub fn iter(&mut self) -> Iter {
         Iter { idx: 0, counter: self }
-    }
-
-    /// TODO: Docs...
-    #[inline]
-    fn index(&self) -> usize {
-        let idx = THREAD_ID.with(|id| id.get());
-        assert!(idx < self.size, "`max_threads` exceeded");
-        idx
     }
 }
 
@@ -70,6 +87,40 @@ impl fmt::Debug for ThreadCounter {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+// ThreadToken
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// FIXME: no send, maybe sync?
+// FIXME: copy + clone?
+pub struct ThreadToken {
+    idx: usize,
+    counter: NonNull<ThreadCounter>,
+}
+
+/********** impl Debug ****************************************************************************/
+
+impl fmt::Debug for ThreadToken {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        unimplemented!()
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// RegistryError
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Copy, Clone, Hash, Eq, Ord, PartialEq, PartialOrd)]
+pub struct RegistryError(());
+
+/********** impl Debug ****************************************************************************/
+
+impl fmt::Debug for RegistryError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        unimplemented!()
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 // Iter
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -79,21 +130,27 @@ pub struct Iter<'a> {
     counter: &'a mut ThreadCounter,
 }
 
+macro_rules! impl_iterator {
+    () => {
+        type Item = usize;
+
+        #[inline]
+        fn next(&mut self) -> Option<Self::Item> {
+            let idx = self.idx;
+            if idx == self.counter.size {
+                None
+            } else {
+                self.idx += 1;
+                Some(self.counter.counters[idx].0.load(Ordering::Relaxed))
+            }
+        }
+    };
+}
+
 /********** impl Iterator *************************************************************************/
 
 impl Iterator for Iter<'_> {
-    type Item = usize;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        let idx = self.idx;
-        if idx == self.counter.size {
-            None
-        } else {
-            self.idx += 1;
-            Some(self.counter.counters[idx].0.load(Ordering::Relaxed))
-        }
-    }
+    impl_iterator!();
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -109,22 +166,12 @@ pub struct IntoIter {
 /********** impl Iterator *************************************************************************/
 
 impl Iterator for IntoIter {
-    type Item = usize;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        let idx = self.idx;
-        if idx == self.counter.size {
-            None
-        } else {
-            self.idx += 1;
-            Some(self.counter.counters[idx].0.load(Ordering::Relaxed))
-        }
-    }
+    impl_iterator!();
 }
 
 #[cfg(test)]
 mod tests {
+    use std::pin::Pin;
     use std::sync::Arc;
     use std::thread;
 
@@ -138,15 +185,28 @@ mod tests {
     }
 
     #[test]
+    fn pinned() {
+        const THREADS: usize = 4;
+
+        let counter = ThreadCounter::new(THREADS);
+        let pin = Pin::new(&counter);
+
+        // use e.g. for scoped thread
+
+        let iter = counter.into_iter();
+    }
+
+    #[test]
     fn sum_after_join() {
         const THREADS: usize = 4;
 
-        let counter = Arc::new(ThreadCounter::new(4));
+        let mut counter = Arc::pin(ThreadCounter::new(THREADS));
         let handles: Vec<_> = (0..THREADS)
             .map(|id| {
-                let counter = Arc::clone(&counter);
+                let counter = counter.clone();
                 thread::spawn(move || {
-                    counter.update(|_| id);
+                    let token = counter.as_ref().register_thread().unwrap();
+                    counter.as_ref().update(token, |_| id);
                 })
             })
             .collect();
@@ -155,7 +215,8 @@ mod tests {
             handle.join().unwrap();
         }
 
-        let counter = Arc::try_unwrap(counter).unwrap();
-        assert_eq!((0..THREADS).sum::<usize>(), counter.into_iter().sum());
+        //not yet stable
+        //let counter = Arc::get_mut(Pin::into_inner(counter)).unwrap();
+        //assert_eq!((0..THREADS).sum::<usize>(), counter.iter().sum());
     }
 }

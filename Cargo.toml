@@ -9,9 +9,12 @@ default = ["std"]
 
 align   = []
 backoff = []
-counter = ["std", "align"]
+counter = []
 std     = []
 
 [[bench]]
 name = "backoff"
 required-features = ["backoff"]
+
+[package.metadata.docs.rs]
+all-features = true
