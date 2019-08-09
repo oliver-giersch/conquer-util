@@ -1,45 +1,78 @@
 //! Fixed-size wait-free thread local counters with functionality for
 //! eventual aggregation.
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(feature = "alloc", not(feature = "std")))]
 use alloc::boxed::Box;
 
 use core::fmt;
-use core::ptr::NonNull;
+use core::ops::Index;
 use core::sync::atomic::{AtomicUsize, Ordering};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Counter
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Debug, Default)]
+#[repr(align(128))]
+pub struct Counter(AtomicUsize);
+
+/********** impl Clone *****************************************************************************/
+
+impl Clone for Counter {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+/********** impl inherent *************************************************************************/
+
+impl Counter {
+    /// Creates a new [`Counter`].
+    #[inline]
+    pub const fn new() -> Self {
+        Self(AtomicUsize::new(0))
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // ThreadCounter
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// TODO: Docs...
-pub struct ThreadCounter {
-    size: usize,
-    counters: Box<[Counter]>,
+pub struct ThreadCounter<'s> {
+    counters: Storage<'s>,
     registered_threads: AtomicUsize,
 }
 
 /********** impl inherent *************************************************************************/
 
-impl ThreadCounter {
+impl<'s> ThreadCounter<'s> {
     /// TODO: Docs...
+    pub const fn with_buffer(buffer: &'s [Counter]) -> Self {
+        Self { counters: Storage::Buffer(buffer), registered_threads: AtomicUsize::new(0) }
+    }
+
+    #[cfg(any(feature = "alloc", feature = "std"))]
+    /// TODO: Docs...
+    ///
+    /// # Panics
+    /// ...
     #[inline]
     pub fn new(max_threads: usize) -> Self {
-        assert!(
-            max_threads > 0 && max_threads < usize::max_value(),
-            "`max_threads` not within valid bounds"
-        );
+        assert!(max_threads > 0, "`max_threads` must be greater than 0");
         Self {
-            size: max_threads,
-            counters: (0..max_threads).map(|_| Default::default()).collect(),
-            registered_threads: AtomicUsize::new(0),
+            counters: Storage::Heap((0..max_threads).map(|_| Default::default()).collect()),
+            registered_threads: Default::default(),
         }
     }
 
     /// TODO:
     pub fn register_thread(&self) -> Result<Token, RegistryError> {
         let token = self.registered_threads.fetch_add(1, Ordering::Relaxed);
-        if token < self.size {
+        assert_ne!(token, usize::max_value(), "overflow of thread counter");
+
+        if token < self.counters.size() {
             Ok(Token { idx: token, counter: self })
         } else {
             Err(RegistryError(()))
@@ -58,16 +91,16 @@ impl ThreadCounter {
 
     /// TODO: Docs...
     #[inline]
-    pub fn iter(&mut self) -> Iter {
+    pub fn iter(&mut self) -> Iter<'_, 's> {
         Iter { idx: 0, counter: self }
     }
 }
 
 /********** impl IntoIter *************************************************************************/
 
-impl IntoIterator for ThreadCounter {
+impl<'c> IntoIterator for ThreadCounter<'c> {
     type Item = usize;
-    type IntoIter = IntoIter;
+    type IntoIter = IntoIter<'c>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
@@ -77,10 +110,10 @@ impl IntoIterator for ThreadCounter {
 
 /********** impl Debug ****************************************************************************/
 
-impl fmt::Debug for ThreadCounter {
+impl fmt::Debug for ThreadCounter<'_> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("ThreadCounter").field("max_threads", &self.size).finish()
+        f.debug_struct("ThreadCounter").field("max_threads", &self.counters.size()).finish()
     }
 }
 
@@ -89,14 +122,14 @@ impl fmt::Debug for ThreadCounter {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Copy, Clone)]
-pub struct Token<'c> {
+pub struct Token<'c, 's> {
     idx: usize,
-    counter: &'c ThreadCounter,
+    counter: &'c ThreadCounter<'s>,
 }
 
 /********** impl Debug ****************************************************************************/
 
-impl fmt::Debug for Token<'_> {
+impl fmt::Debug for Token<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         unimplemented!()
     }
@@ -122,9 +155,9 @@ impl fmt::Debug for RegistryError {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// TODO: Docs...
-pub struct Iter<'a> {
+pub struct Iter<'c, 's> {
     idx: usize,
-    counter: &'a mut ThreadCounter,
+    counter: &'c mut ThreadCounter<'s>,
 }
 
 macro_rules! impl_iterator {
@@ -134,7 +167,7 @@ macro_rules! impl_iterator {
         #[inline]
         fn next(&mut self) -> Option<Self::Item> {
             let idx = self.idx;
-            if idx == self.counter.size {
+            if idx == self.counter.counters.size() {
                 None
             } else {
                 self.idx += 1;
@@ -146,7 +179,7 @@ macro_rules! impl_iterator {
 
 /********** impl Iterator *************************************************************************/
 
-impl Iterator for Iter<'_> {
+impl Iterator for Iter<'_, '_> {
     impl_iterator!();
 }
 
@@ -155,31 +188,66 @@ impl Iterator for Iter<'_> {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// TODO: Docs...
-pub struct IntoIter {
+pub struct IntoIter<'s> {
     idx: usize,
-    counter: ThreadCounter,
+    counter: ThreadCounter<'s>,
 }
 
 /********** impl Iterator *************************************************************************/
 
-impl Iterator for IntoIter {
+impl Iterator for IntoIter<'_> {
     impl_iterator!();
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// Counter
+// Storage
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Debug, Default)]
-#[repr(align(128))]
-struct Counter(AtomicUsize);
+/// TODO: Docs...
+enum Storage<'s> {
+    Buffer(&'s [Counter]),
+    #[cfg(any(feature = "alloc", feature = "std"))]
+    Heap(Box<[Counter]>),
+}
+
+/********** impl inherent *************************************************************************/
+
+impl Storage<'_> {
+    #[inline]
+    fn size(&self) -> usize {
+        match self {
+            Storage::Buffer(ref slice) => slice.len(),
+            #[cfg(any(feature = "alloc", feature = "std"))]
+            Storage::Heap(ref boxed) => boxed.len(),
+        }
+    }
+}
+
+impl Index<usize> for Storage<'_> {
+    type Output = Counter;
+
+    #[inline]
+    fn index(&self, index: usize) -> &Self::Output {
+        match self {
+            Storage::Buffer(ref slice) => &slice[index],
+            #[cfg(any(feature = "alloc", feature = "std"))]
+            Storage::Heap(ref boxed) => &boxed[index],
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use std::thread;
 
-    use super::ThreadCounter;
+    use super::{Counter, ThreadCounter};
+
+    #[test]
+    fn with_buffer() {
+        let buffer = [Counter::new(), Counter::new(), Counter::new(), Counter::new()];
+        let counter = ThreadCounter::with_buffer(&buffer);
+    }
 
     #[test]
     fn sum() {
