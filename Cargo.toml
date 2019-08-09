@@ -5,17 +5,18 @@ authors = ["Oliver Giersch <oliver.giersch@b-tu.de>"]
 edition = "2018"
 
 [features]
-default = ["alloc", "std"]
+default  = ["alloc", "std"]
 
-align   = []
-alloc   = []
-backoff = []
-std     = ["alloc"]
-tls     = []
+std      = ["alloc"]
+
+align    = []
+alloc    = []
+back-off = []
+tls      = []
 
 [[bench]]
 name = "backoff"
-required-features = ["backoff"]
+required-features = ["back-off"]
 
 [package.metadata.docs.rs]
 all-features = true
