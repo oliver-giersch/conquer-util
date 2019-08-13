@@ -1,7 +1,7 @@
 #[cfg(all(feature = "alloc", not(feature = "std")))]
 use alloc::boxed::Box;
 
-use core::cell::{Cell, UnsafeCell};
+use core::cell::UnsafeCell;
 use core::fmt;
 use core::marker::PhantomData;
 use core::mem;
@@ -12,7 +12,9 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 // Local
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-/// TODO: Docs...
+/// A wrapper for an instance of `T` that can be managed by a
+/// [`BoundedThreadLocal`].
+#[derive(Debug)]
 #[repr(align(128))]
 pub struct Local<T>(UnsafeCell<Option<T>>);
 
@@ -45,10 +47,30 @@ pub struct BoundedThreadLocal<'s, T> {
     registered: AtomicUsize,
 }
 
+/********** impl Send + Sync **********************************************************************/
+
+unsafe impl<T> Send for BoundedThreadLocal<'_, T> {}
+unsafe impl<T> Sync for BoundedThreadLocal<'_, T> {}
+
 /********** impl inherent *************************************************************************/
 
 impl<'s, T> BoundedThreadLocal<'s, T> {
-    /// Creates a new [`BoundedThreadLocal`] with the specified `buffer`.
+    /// Creates a new [`BoundedThreadLocal`] that borrows the specified
+    /// `buffer`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use conquer_util::{BoundedThreadLocal, Local};
+    ///
+    /// let buf: [Local<i32>; 3] = [Local::new(), Local::new(), Local::new()];
+    /// let tls = BoundedThreadLocal::with_buffer(&buf);
+    ///
+    /// assert!(tls.thread_token(Default::default).is_ok());
+    /// assert!(tls.thread_token(Default::default).is_ok());
+    /// assert!(tls.thread_token(Default::default).is_ok());
+    /// assert!(tls.thread_token(Default::default).is_err());
+    /// ```
     #[inline]
     pub const fn with_buffer(buffer: &'s [Local<T>]) -> Self {
         Self { storage: Storage::Buffer(buffer), registered: AtomicUsize::new(0) }
@@ -57,8 +79,8 @@ impl<'s, T> BoundedThreadLocal<'s, T> {
     /// Creates a new [`BoundedThreadLocal`] with a maximum size of
     /// `max_threads`.
     ///
-    /// This function internally uses an allocated buffer for storing the thread
-    /// local values.
+    /// This function internally uses an allocated and owned buffer for storing
+    /// the thread local values.
     #[cfg(any(feature = "alloc", feature = "std"))]
     #[inline]
     pub fn new(max_threads: usize) -> Self {
@@ -69,19 +91,87 @@ impl<'s, T> BoundedThreadLocal<'s, T> {
         }
     }
 
-    /// TODO: Docs...
+    /// Returns a thread local token to a unique instance of `T`.
+    ///
+    /// The thread local instance will **not** be dropped, when the token itself
+    /// is dropped and can e.g. be iterated afterwards.
+    ///
+    /// # Errors
+    ///
+    /// This method fails, if the maximum number of tokens for this
+    /// [`BoundedThreadLocal`] has already been acquired.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use conquer_util::BoundedThreadLocal;
+    ///
+    /// # fn main() -> Result<(), conquer_util::BoundsError> {
+    /// let tls = BoundedThreadLocal::new(1);
+    /// let mut token = tls.thread_token(Default::default)?;
+    /// token.update(|local| *local = 1);
+    /// # Ok(())
+    /// # }
+    /// ```
     #[inline]
     pub fn thread_token(&self, init: impl FnOnce() -> T) -> Result<Token<'_, T>, BoundsError> {
         self.create_token(DropBehaviour::Defer, init)
     }
 
-    /// TODO: Docs...
+    /// Returns a thread local token to a unique instance of `T`.
+    ///
+    /// The thread local instance will be dropped, when the token itself
+    /// is dropped and can hence **not** be iterated afterwards.
+    ///
+    /// # Errors
+    ///
+    /// This method fails, if the maximum number of tokens for this
+    /// [`BoundedThreadLocal`] has already been acquired.
     #[inline]
     pub fn dropping_thread_token(
         &self,
         init: impl FnOnce() -> T,
     ) -> Result<Token<'_, T>, BoundsError> {
         self.create_token(DropBehaviour::Drop, init)
+    }
+
+    /// Creates an [`IterMut`] over all [`Local`] instances.
+    ///
+    /// The iterator itself yields immutable items but the method itself
+    /// requires a mutable reference in order to ensure there can be no
+    /// concurrent accesses by other threads during the iteration.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::thread;
+    /// use std::sync::Arc;
+    ///
+    /// use conquer_util::BoundedThreadLocal;
+    ///
+    /// let counter = Arc::new(BoundedThreadLocal::new(4));
+    ///
+    /// let handles: Vec<_> = (0..4)
+    ///     .map(|id| {
+    ///         let counter = Arc::clone(&counter);
+    ///         thread::spawn(move || {
+    ///             counter.thread_token(|| id);
+    ///         })
+    ///     })
+    ///     .collect();
+    ///
+    /// for handle in handles {
+    ///     handle.join().unwrap();
+    /// }
+    ///
+    /// let mut counter = Arc::try_unwrap(counter).unwrap();
+    ///
+    /// let sum: i32 = counter.iter_mut().filter_map(|local| local.copied()).sum();
+    /// assert_eq!(sum, (0..4).sum());
+    /// ```
+    #[inline]
+    pub fn iter_mut(&mut self) -> IterMut<'s, '_, T> {
+        IterMut { idx: 0, tls: self }
     }
 
     #[inline]
@@ -94,9 +184,11 @@ impl<'s, T> BoundedThreadLocal<'s, T> {
         assert!(token <= isize::max_value() as usize, "thread counter too close to overflow");
 
         if token < self.storage.len() {
-            let local = &self.storage[token];
-            let slot = unsafe { &mut *local.0.get() };
-            *slot = Some(init());
+            let slot = &self.storage[token].0;
+            {
+                let local = unsafe { &mut *slot.get() };
+                *local = Some(init());
+            }
 
             Ok(Token { slot, drop, _marker: PhantomData })
         } else {
@@ -105,11 +197,45 @@ impl<'s, T> BoundedThreadLocal<'s, T> {
     }
 }
 
+/********** impl inherent (T: Default) ************************************************************/
+
+impl<'s, T: Default> BoundedThreadLocal<'s, T> {
+    /// Returns a [`Default`] initialized thread local token to a unique
+    /// instance of `T`.
+    ///
+    /// The thread local instance will **not** be dropped, when the token itself
+    /// is dropped and can e.g. be iterated afterwards.
+    ///
+    /// # Errors
+    ///
+    /// This method fails, if the maximum number of tokens for this
+    /// [`BoundedThreadLocal`] has already been acquired.
+    #[inline]
+    pub fn default_thread_token(&self) -> Result<Token<'_, T>, BoundsError> {
+        self.create_token(DropBehaviour::Defer, Default::default)
+    }
+
+    /// Returns a [`Default`] initialized thread local token to a unique
+    /// instance of `T`.
+    ///
+    /// The thread local instance will be dropped, when the token itself
+    /// is dropped and can hence **not** be iterated afterwards.
+    ///
+    /// # Errors
+    ///
+    /// This method fails, if the maximum number of tokens for this
+    /// [`BoundedThreadLocal`] has already been acquired.
+    #[inline]
+    pub fn default_dropping_token(&self) -> Result<Token<'_, T>, BoundsError> {
+        self.create_token(DropBehaviour::Drop, Default::default)
+    }
+}
+
 /********** impl IntoIterator *********************************************************************/
 
-impl<T> IntoIterator for BoundedThreadLocal<'_, T> {
-    type Item = T;
-    type IntoIter = IntoIter<'_, T>;
+impl<'s, T> IntoIterator for BoundedThreadLocal<'s, T> {
+    type Item = Option<T>;
+    type IntoIter = IntoIter<'s, T>;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
@@ -117,13 +243,26 @@ impl<T> IntoIterator for BoundedThreadLocal<'_, T> {
     }
 }
 
+/********** impl Debug ****************************************************************************/
+
+impl<T> fmt::Debug for BoundedThreadLocal<'_, T> {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("BoundedThreadLocal")
+            .field("max_size", &self.storage.len())
+            .field("access_count", &self.registered.load(Ordering::SeqCst))
+            .finish()
+    }
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Token
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-/// TODO: Docs...
+/// A thread local token granting unique access to an instance of `T` that is
+/// contained in a [`BoundedThreadLocal`]
 pub struct Token<'a, T> {
-    slot: &'a mut Option<T>,
+    slot: &'a UnsafeCell<Option<T>>,
     drop: DropBehaviour,
     _marker: PhantomData<*const ()>,
 }
@@ -131,17 +270,18 @@ pub struct Token<'a, T> {
 /********** impl inherent *************************************************************************/
 
 impl<'a, T> Token<'a, T> {
-    /// TODO: Docs...
+    /// Returns a reference to the initialized thread local state.
     #[inline]
     pub fn get(&self) -> &T {
-        self.slot.as_ref().unwrap()
+        let local = unsafe { &*self.slot.get() };
+        local.as_ref().unwrap()
     }
 
-    /// TODO: Docs...
+    /// Updates the thread local state with the specified closure `func`.
     #[inline]
-    pub fn update(&mut self, func: impl FnOnce(&'a mut T)) {
-        let slot = self.slot.as_mut().unwrap();
-        func(slot);
+    pub fn update(&mut self, func: impl FnOnce(&mut T)) {
+        let local = unsafe { &mut *self.slot.get() };
+        func(local.as_mut().unwrap());
     }
 }
 
@@ -169,7 +309,8 @@ impl<T> Drop for Token<'_, T> {
     #[inline]
     fn drop(&mut self) {
         if let DropBehaviour::Drop = self.drop {
-            mem::drop(self.slot.take());
+            let local = unsafe { &mut *self.slot.get() };
+            mem::drop(local.take());
         }
     }
 }
@@ -178,6 +319,8 @@ impl<T> Drop for Token<'_, T> {
 // BoundsError
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+/// An Error for signalling than more than the specified maximum number of
+/// threads attempted to access a [`BoundedThreadLocal`].
 #[derive(Copy, Clone, Hash, Eq, Ord, PartialEq, PartialOrd)]
 pub struct BoundsError(());
 
@@ -195,7 +338,7 @@ impl fmt::Debug for BoundsError {
 impl fmt::Display for BoundsError {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!("exceeded bounds for `BoundedThreadLocal`")
+        write!(f, "exceeded bounds for `BoundedThreadLocal`")
     }
 }
 
@@ -208,6 +351,8 @@ impl std::error::Error for BoundsError {}
 // IterMut
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+/// A iterator that can be created from an unique reference to a
+/// [`BoundedThreadLocal`].
 #[derive(Debug)]
 pub struct IterMut<'s, 'tls, T> {
     idx: usize,
@@ -238,6 +383,7 @@ impl<'s, 'tls, T> Iterator for IterMut<'s, 'tls, T> {
 // IntoIter
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+/// An owning iterator that can be created from an owned [`BoundedThreadLocal`].
 #[derive(Debug)]
 pub struct IntoIter<'s, T> {
     idx: usize,

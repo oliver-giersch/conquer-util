@@ -2,6 +2,7 @@
 //! waiting strategy in order to reduce contention on shared memory and caches
 //! in a concurrent environment.
 
+#[deny(unsafe_code)]
 #[cfg(feature = "std")]
 use std::time::{Duration, Instant};
 
@@ -16,7 +17,7 @@ const SPIN_LIMIT_POW: u32 = 6;
 // BackOff
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-/// A type for exponential back-off in loops.
+/// A type for exponential back-off in tight loops.
 ///
 /// In concurrent environments it can often be beneficial to back off from
 /// accessing shared variables in loops in order to reduce contention and

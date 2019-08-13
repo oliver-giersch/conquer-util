@@ -9,28 +9,18 @@ pub use self::Aligned64 as CacheAligned;
 use core::borrow::{Borrow, BorrowMut};
 use core::ops::{Deref, DerefMut};
 
-/// TODO: Docs...
-pub trait Aligned: Sized {
-    /// TODO: Docs...
-    type Item: Sized;
-
-    /// TODO: Docs...
-    fn get(aligned: &Self) -> &Self::Item;
-}
-
 macro_rules! impl_align {
-    ($(struct align($align:expr) $wrapper:ident;)*) => {
+    ($(struct align($align:expr) $wrapper:ident; $comment:expr)*) => {
         $(
-            #[doc = "A thin wrapper type with an alignment of at least $align bytes."]
+            #[doc = $comment]
             #[derive(Copy, Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
             #[repr(align($align))]
             pub struct $wrapper<T>(pub T);
 
-            impl<T> Aligned for $wrapper<T> {
-                type Item = T;
-
+            impl<T> $wrapper<T> {
+                /// Returns a reference to the inner type.
                 #[inline]
-                fn get(aligned: &Self) -> &Self::Item {
+                pub fn get(aligned: &Self) -> &T {
                     &aligned.0
                 }
             }
@@ -83,36 +73,36 @@ macro_rules! impl_align {
 }
 
 impl_align! {
-    struct align(1) Aligned1;
-    struct align(2) Aligned2;
-    struct align(4) Aligned4;
-    struct align(8) Aligned8;
-    struct align(16) Aligned16;
-    struct align(32) Aligned32;
-    struct align(64) Aligned64;
-    struct align(128) Aligned128;
-    struct align(256) Aligned256;
-    struct align(512) Aligned512;
-    struct align(1024) Aligned1024;
-    struct align(2048) Aligned2048;
-    struct align(4096) Aligned4096;
-    struct align(0x2000) Aligned8k;
-    struct align(0x4000) Aligned16k;
-    struct align(0x8000) Aligned32k;
-    struct align(0x10000) Aligned64k;
-    struct align(0x20000) Aligned128k;
-    struct align(0x40000) Aligned256k;
-    struct align(0x80000) Aligned512k;
-    struct align(0x100000) Aligned1M;
-    struct align(0x200000) Aligned2M;
-    struct align(0x400000) Aligned4M;
-    struct align(0x800000) Aligned8M;
-    struct align(0x1000000) Aligned16M;
-    struct align(0x2000000) Aligned32M;
-    struct align(0x4000000) Aligned64M;
-    struct align(0x8000000) Aligned128M;
-    struct align(0x10000000) Aligned256M;
-    struct align(0x10000000) Aligned512M;
+    struct align(1)          Aligned1;    "A thin wrapper type with an alignment of at least 1 bytes."
+    struct align(2)          Aligned2;    "A thin wrapper type with an alignment of at least 2 bytes."
+    struct align(4)          Aligned4;    "A thin wrapper type with an alignment of at least 4 bytes."
+    struct align(8)          Aligned8;    "A thin wrapper type with an alignment of at least 8 bytes."
+    struct align(16)         Aligned16;   "A thin wrapper type with an alignment of at least 16 bytes."
+    struct align(32)         Aligned32;   "A thin wrapper type with an alignment of at least 32 bytes."
+    struct align(64)         Aligned64;   "A thin wrapper type with an alignment of at least 64 bytes."
+    struct align(128)        Aligned128;  "A thin wrapper type with an alignment of at least 128 bytes."
+    struct align(256)        Aligned256;  "A thin wrapper type with an alignment of at least 256 bytes."
+    struct align(512)        Aligned512;  "A thin wrapper type with an alignment of at least 512 bytes."
+    struct align(1024)       Aligned1024; "A thin wrapper type with an alignment of at least 1024 bytes."
+    struct align(2048)       Aligned2048; "A thin wrapper type with an alignment of at least 2048 bytes."
+    struct align(4096)       Aligned4096; "A thin wrapper type with an alignment of at least 4096 bytes."
+    struct align(0x2000)     Aligned8k;   "A thin wrapper type with an alignment of at least 8kB."
+    struct align(0x4000)     Aligned16k;  "A thin wrapper type with an alignment of at least 16 kB."
+    struct align(0x8000)     Aligned32k;  "A thin wrapper type with an alignment of at least 32 kB."
+    struct align(0x10000)    Aligned64k;  "A thin wrapper type with an alignment of at least 64 kB."
+    struct align(0x20000)    Aligned128k; "A thin wrapper type with an alignment of at least 128 kB."
+    struct align(0x40000)    Aligned256k; "A thin wrapper type with an alignment of at least 256 kB."
+    struct align(0x80000)    Aligned512k; "A thin wrapper type with an alignment of at least 512 kB."
+    struct align(0x100000)   Aligned1M;   "A thin wrapper type with an alignment of at least 1 MB."
+    struct align(0x200000)   Aligned2M;   "A thin wrapper type with an alignment of at least 2 MB."
+    struct align(0x400000)   Aligned4M;   "A thin wrapper type with an alignment of at least 4 MB."
+    struct align(0x800000)   Aligned8M;   "A thin wrapper type with an alignment of at least 8 MB."
+    struct align(0x1000000)  Aligned16M;  "A thin wrapper type with an alignment of at least 16 MB."
+    struct align(0x2000000)  Aligned32M;  "A thin wrapper type with an alignment of at least 32 MB."
+    struct align(0x4000000)  Aligned64M;  "A thin wrapper type with an alignment of at least 64 MB."
+    struct align(0x8000000)  Aligned128M; "A thin wrapper type with an alignment of at least 128 MB."
+    struct align(0x10000000) Aligned256M; "A thin wrapper type with an alignment of at least 256 MB."
+    struct align(0x10000000) Aligned512M; "A thin wrapper type with an alignment of at least 512 MB."
 }
 
 #[cfg(test)]
