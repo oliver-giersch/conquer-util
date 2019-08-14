@@ -4,7 +4,6 @@ use alloc::boxed::Box;
 use core::cell::UnsafeCell;
 use core::fmt;
 use core::marker::PhantomData;
-use core::mem;
 use core::ops::Index;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -52,11 +51,37 @@ pub struct BoundedThreadLocal<'s, T> {
 unsafe impl<T> Send for BoundedThreadLocal<'_, T> {}
 unsafe impl<T> Sync for BoundedThreadLocal<'_, T> {}
 
+/********** impl inherent (T: Default) ************************************************************/
+
+impl<'s, T: Default> BoundedThreadLocal<'s, T> {
+    /// Creates a new [`Default`] initialized [`BoundedThreadLocal`] that
+    /// borrows the specified `buffer`.
+    #[inline]
+    pub fn with_buffer(buffer: &'s [Local<T>]) -> Self {
+        Self::with_buffer_and_init(buffer, Default::default)
+    }
+
+    /// Creates a new [`Default`] initialized [`BoundedThreadLocal`] that
+    /// internally allocates a buffer of `max_size`.
+    ///
+    /// # Panics
+    ///
+    /// This method panics, if `max_size` is 0.
+    #[cfg(any(feature = "alloc", feature = "std"))]
+    #[inline]
+    pub fn new(max_threads: usize) -> Self {
+        Self::with_init(max_threads, Default::default)
+    }
+}
+
 /********** impl inherent *************************************************************************/
 
 impl<'s, T> BoundedThreadLocal<'s, T> {
     /// Creates a new [`BoundedThreadLocal`] that borrows the specified
-    /// `buffer`.
+    /// `buffer` and initializes each [`Local`] with `init`.
+    ///
+    /// If the the `buffer` has previously used by a [`BoundedThreadLocal`],
+    /// the previous values are dropped upon initialization.
     ///
     /// # Examples
     ///
@@ -64,29 +89,35 @@ impl<'s, T> BoundedThreadLocal<'s, T> {
     /// use conquer_util::{BoundedThreadLocal, Local};
     ///
     /// let buf: [Local<i32>; 3] = [Local::new(), Local::new(), Local::new()];
-    /// let tls = BoundedThreadLocal::with_buffer(&buf);
+    /// let tls = BoundedThreadLocal::with_buffer_and_init(&buf, || -1);
     ///
-    /// assert!(tls.thread_token(Default::default).is_ok());
-    /// assert!(tls.thread_token(Default::default).is_ok());
-    /// assert!(tls.thread_token(Default::default).is_ok());
-    /// assert!(tls.thread_token(Default::default).is_err());
+    /// assert_eq!(tls.thread_token().unwrap().get(), &-1);
+    /// assert_eq!(tls.thread_token().unwrap().get(), &-1);
+    /// assert_eq!(tls.thread_token().unwrap().get(), &-1);
+    /// assert!(tls.thread_token().is_err());
     /// ```
     #[inline]
-    pub const fn with_buffer(buffer: &'s [Local<T>]) -> Self {
+    pub fn with_buffer_and_init(buffer: &'s [Local<T>], init: impl Fn() -> T) -> Self {
+        for local in buffer {
+            let slot = unsafe { &mut *local.0.get() };
+            *slot = Some(init());
+        }
         Self { storage: Storage::Buffer(buffer), registered: AtomicUsize::new(0) }
     }
 
-    /// Creates a new [`BoundedThreadLocal`] with a maximum size of
-    /// `max_threads`.
+    /// Creates a new [`BoundedThreadLocal`] that internally allocates a buffer
+    /// of `max_size` and initializes each [`Local`] with `init`.
     ///
-    /// This function internally uses an allocated and owned buffer for storing
-    /// the thread local values.
-    #[cfg(any(feature = "alloc", feature = "std"))]
+    /// # Panics
+    ///
+    /// This method panics, if `max_size` is 0.
     #[inline]
-    pub fn new(max_threads: usize) -> Self {
+    pub fn with_init(max_threads: usize, init: impl Fn() -> T) -> Self {
         assert!(max_threads > 0, "`max_threads` must be greater than 0");
         Self {
-            storage: Storage::Heap((0..max_threads).map(|_| Default::default()).collect()),
+            storage: Storage::Heap(
+                (0..max_threads).map(|_| Local(UnsafeCell::new(Some(init())))).collect(),
+            ),
             registered: Default::default(),
         }
     }
@@ -107,32 +138,28 @@ impl<'s, T> BoundedThreadLocal<'s, T> {
     /// use conquer_util::BoundedThreadLocal;
     ///
     /// # fn main() -> Result<(), conquer_util::BoundsError> {
+    ///
     /// let tls = BoundedThreadLocal::new(1);
-    /// let mut token = tls.thread_token(Default::default)?;
+    /// let mut token = tls.thread_token()?;
     /// token.update(|local| *local = 1);
+    /// assert_eq!(token.get(), &1);
+    ///
     /// # Ok(())
     /// # }
     /// ```
     #[inline]
-    pub fn thread_token(&self, init: impl FnOnce() -> T) -> Result<Token<'_, T>, BoundsError> {
-        self.create_token(DropBehaviour::Defer, init)
-    }
+    pub fn thread_token(&self) -> Result<Token<'_, T>, BoundsError> {
+        let token: usize = self.registered.fetch_add(1, Ordering::Relaxed);
+        assert!(token <= isize::max_value() as usize, "thread counter too close to overflow");
 
-    /// Returns a thread local token to a unique instance of `T`.
-    ///
-    /// The thread local instance will be dropped, when the token itself
-    /// is dropped and can hence **not** be iterated afterwards.
-    ///
-    /// # Errors
-    ///
-    /// This method fails, if the maximum number of tokens for this
-    /// [`BoundedThreadLocal`] has already been acquired.
-    #[inline]
-    pub fn dropping_thread_token(
-        &self,
-        init: impl FnOnce() -> T,
-    ) -> Result<Token<'_, T>, BoundsError> {
-        self.create_token(DropBehaviour::Drop, init)
+        if token < self.storage.len() {
+            let slot = &self.storage[token].0;
+            let local = unsafe { (&mut *slot.get()).as_mut().unwrap_or_else(|| unreachable!()) };
+
+            Ok(Token { local, _marker: PhantomData })
+        } else {
+            Err(BoundsError(()))
+        }
     }
 
     /// Creates an [`IterMut`] over all [`Local`] instances.
@@ -149,13 +176,15 @@ impl<'s, T> BoundedThreadLocal<'s, T> {
     ///
     /// use conquer_util::BoundedThreadLocal;
     ///
-    /// let counter = Arc::new(BoundedThreadLocal::new(4));
+    /// const THREADS: usize = 4;
+    /// let counter = Arc::new(BoundedThreadLocal::new(THREADS));
     ///
-    /// let handles: Vec<_> = (0..4)
+    /// let handles: Vec<_> = (0..THREADS)
     ///     .map(|id| {
     ///         let counter = Arc::clone(&counter);
     ///         thread::spawn(move || {
-    ///             counter.thread_token(|| id);
+    ///             let mut token = counter.thread_token().unwrap();
+    ///             token.update(|curr| *curr = id)
     ///         })
     ///     })
     ///     .collect();
@@ -166,75 +195,19 @@ impl<'s, T> BoundedThreadLocal<'s, T> {
     ///
     /// let mut counter = Arc::try_unwrap(counter).unwrap();
     ///
-    /// let sum: i32 = counter.iter_mut().filter_map(|local| local.copied()).sum();
+    /// let sum: usize = counter.iter().copied().sum();
     /// assert_eq!(sum, (0..4).sum());
     /// ```
     #[inline]
-    pub fn iter_mut(&mut self) -> IterMut<'s, '_, T> {
+    pub fn iter(&mut self) -> IterMut<'s, '_, T> {
         IterMut { idx: 0, tls: self }
-    }
-
-    #[inline]
-    fn create_token(
-        &self,
-        drop: DropBehaviour,
-        init: impl FnOnce() -> T,
-    ) -> Result<Token<'_, T>, BoundsError> {
-        let token: usize = self.registered.fetch_add(1, Ordering::Relaxed);
-        assert!(token <= isize::max_value() as usize, "thread counter too close to overflow");
-
-        if token < self.storage.len() {
-            let slot = &self.storage[token].0;
-            {
-                let local = unsafe { &mut *slot.get() };
-                *local = Some(init());
-            }
-
-            Ok(Token { slot, drop, _marker: PhantomData })
-        } else {
-            Err(BoundsError(()))
-        }
-    }
-}
-
-/********** impl inherent (T: Default) ************************************************************/
-
-impl<'s, T: Default> BoundedThreadLocal<'s, T> {
-    /// Returns a [`Default`] initialized thread local token to a unique
-    /// instance of `T`.
-    ///
-    /// The thread local instance will **not** be dropped, when the token itself
-    /// is dropped and can e.g. be iterated afterwards.
-    ///
-    /// # Errors
-    ///
-    /// This method fails, if the maximum number of tokens for this
-    /// [`BoundedThreadLocal`] has already been acquired.
-    #[inline]
-    pub fn default_thread_token(&self) -> Result<Token<'_, T>, BoundsError> {
-        self.create_token(DropBehaviour::Defer, Default::default)
-    }
-
-    /// Returns a [`Default`] initialized thread local token to a unique
-    /// instance of `T`.
-    ///
-    /// The thread local instance will be dropped, when the token itself
-    /// is dropped and can hence **not** be iterated afterwards.
-    ///
-    /// # Errors
-    ///
-    /// This method fails, if the maximum number of tokens for this
-    /// [`BoundedThreadLocal`] has already been acquired.
-    #[inline]
-    pub fn default_dropping_token(&self) -> Result<Token<'_, T>, BoundsError> {
-        self.create_token(DropBehaviour::Drop, Default::default)
     }
 }
 
 /********** impl IntoIterator *********************************************************************/
 
 impl<'s, T> IntoIterator for BoundedThreadLocal<'s, T> {
-    type Item = Option<T>;
+    type Item = T;
     type IntoIter = IntoIter<'s, T>;
 
     #[inline]
@@ -262,8 +235,7 @@ impl<T> fmt::Debug for BoundedThreadLocal<'_, T> {
 /// A thread local token granting unique access to an instance of `T` that is
 /// contained in a [`BoundedThreadLocal`]
 pub struct Token<'a, T> {
-    slot: &'a UnsafeCell<Option<T>>,
-    drop: DropBehaviour,
+    local: &'a mut T,
     _marker: PhantomData<*const ()>,
 }
 
@@ -273,15 +245,13 @@ impl<'a, T> Token<'a, T> {
     /// Returns a reference to the initialized thread local state.
     #[inline]
     pub fn get(&self) -> &T {
-        let local = unsafe { &*self.slot.get() };
-        local.as_ref().unwrap()
+        &self.local
     }
 
     /// Updates the thread local state with the specified closure `func`.
     #[inline]
     pub fn update(&mut self, func: impl FnOnce(&mut T)) {
-        let local = unsafe { &mut *self.slot.get() };
-        func(local.as_mut().unwrap());
+        func(self.local);
     }
 }
 
@@ -300,18 +270,6 @@ impl<'a, T: fmt::Display> fmt::Display for Token<'a, T> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(&self.get(), f)
-    }
-}
-
-/********** impl Drop *****************************************************************************/
-
-impl<T> Drop for Token<'_, T> {
-    #[inline]
-    fn drop(&mut self) {
-        if let DropBehaviour::Drop = self.drop {
-            let local = unsafe { &mut *self.slot.get() };
-            mem::drop(local.take());
-        }
     }
 }
 
@@ -362,17 +320,16 @@ pub struct IterMut<'s, 'tls, T> {
 /********** impl Iterator *************************************************************************/
 
 impl<'s, 'tls, T> Iterator for IterMut<'s, 'tls, T> {
-    type Item = Option<&'tls mut T>;
+    type Item = &'tls T;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let idx = self.idx;
-        self.idx += 1;
-
         if idx < self.tls.storage.len() {
+            self.idx += 1;
             let local = &self.tls.storage[idx];
-            let slot = unsafe { &mut *local.0.get() };
-            Some(slot.as_mut())
+            let slot = unsafe { &*local.0.get() };
+            Some(slot.as_ref().unwrap_or_else(|| unreachable!()))
         } else {
             None
         }
@@ -393,17 +350,16 @@ pub struct IntoIter<'s, T> {
 /********** impl Iterator *************************************************************************/
 
 impl<T> Iterator for IntoIter<'_, T> {
-    type Item = Option<T>;
+    type Item = T;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let idx = self.idx;
-        self.idx += 1;
-
         if idx < self.tls.storage.len() {
+            self.idx += 1;
             let local = &self.tls.storage[idx];
             let slot = unsafe { &mut *local.0.get() };
-            Some(slot.take())
+            Some(slot.take().unwrap_or_else(|| unreachable!()))
         } else {
             None
         }
@@ -449,12 +405,35 @@ impl<T> Index<usize> for Storage<'_, T> {
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// Storage
-////////////////////////////////////////////////////////////////////////////////////////////////////
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::thread;
 
-#[derive(Debug, Clone, Copy)]
-enum DropBehaviour {
-    Drop,
-    Defer,
+    use super::BoundedThreadLocal;
+
+    #[test]
+    fn into_iter() {
+        const THREADS: usize = 4;
+        let tls: Arc<BoundedThreadLocal<usize>> = Arc::new(BoundedThreadLocal::new(THREADS));
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let tls = Arc::clone(&tls);
+                thread::spawn(move || {
+                    let mut token = tls.thread_token().unwrap();
+                    for _ in 0..10 {
+                        token.update(|curr| *curr += 1);
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let counter = Arc::try_unwrap(tls).unwrap();
+        assert_eq!(counter.into_iter().sum::<usize>(), THREADS * 10);
+    }
 }
