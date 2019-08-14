@@ -329,6 +329,7 @@ impl<'s, 'tls, T> Iterator for IterMut<'s, 'tls, T> {
             self.idx += 1;
             let local = &self.tls.storage[idx];
             let slot = unsafe { &*local.0.get() };
+
             Some(slot.as_ref().unwrap_or_else(|| unreachable!()))
         } else {
             None

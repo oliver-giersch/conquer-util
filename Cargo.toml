@@ -5,9 +5,9 @@ authors = ["Oliver Giersch <oliver.giersch@b-tu.de>"]
 edition = "2018"
 
 [features]
-default  = ["alloc", "std"]
+default  = ["std"]
 
-std      = ["alloc"]
+std      = []
 
 align    = []
 alloc    = []
