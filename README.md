@@ -2,8 +2,8 @@
 
 Utilities for lock-free and concurrent programming.
 
-[![Build Status](https://travis-ci.com/oliver-giersch/conquer-util.svg?branch=master)](
-https://travis-ci.com/oliver-giersch/conquer-util)
+[![Build Status](https://travis-ci.org/oliver-giersch/conquer-util.svg?branch=master)](
+https://travis-ci.org/oliver-giersch/conquer-util)
 [![Latest version](https://img.shields.io/crates/v/conquer-util.svg)](https://crates.io/crates/conquer-util)
 [![Documentation](https://docs.rs/conquer-util/badge.svg)](https://docs.rs/conquer-util)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](
