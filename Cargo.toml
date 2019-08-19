@@ -1,8 +1,14 @@
 [package]
 name = "conquer-util"
 version = "0.1.0"
-authors = ["Oliver Giersch <oliver.giersch@b-tu.de>"]
+authors = ["Oliver Giersch"]
+license = "MIT/Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/oliver-giersch/conquer-util.git"
+documentation = "https://docs.rs/conquer-util"
+keywords = ["concurrent", "lock-free", "utilities"]
 edition = "2018"
+exclude = [".travis.yml"]
 
 [features]
 default  = ["std"]
