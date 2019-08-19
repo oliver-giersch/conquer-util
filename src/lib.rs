@@ -1,7 +1,7 @@
 //! Common utilities for lock-free and concurrent programming.
 //!
-//! This crate provides fine-grained control over its contents through feature
-//! flags:
+//! This crate provides fine-grained control over its contents through cargo
+//! feature flags:
 //!
 //! # `#![no_std]` Compatibility
 //!
