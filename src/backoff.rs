@@ -25,7 +25,7 @@ use rand::{Rng, SeedableRng};
 /// amount of time.
 #[derive(Clone)]
 pub struct BackOff {
-    strategy: RefCell<BackOffStrategy>,
+    strategy: RefCell<Strategy>,
 }
 
 /********** impl inherent *************************************************************************/
@@ -44,19 +44,19 @@ impl BackOff {
     /// strategy.
     #[inline]
     pub const fn new() -> Self {
-        Self { strategy: RefCell::new(BackOffStrategy::constant()) }
+        Self { strategy: RefCell::new(Strategy::constant()) }
     }
 
-    /// Creates a new [`BackOff`] instance with a randomize exponential back-off
-    /// strategy.
+    /// Creates a new [`BackOff`] instance with a randomized exponential
+    /// back-off strategy.
     pub fn random() -> Self {
-        Self { strategy: RefCell::new(BackOffStrategy::random()) }
+        Self { strategy: RefCell::new(Strategy::random()) }
     }
 
-    /// Creates a new [`BackOff`] instance with a randomize exponential back-off
-    /// strategy using the given `seed`.
+    /// Creates a new [`BackOff`] instance with a randomized exponential
+    /// back-off strategy using the given `seed`.
     pub fn random_with_seed(seed: u64) -> Self {
-        Self { strategy: RefCell::new(BackOffStrategy::random_with_seed(seed)) }
+        Self { strategy: RefCell::new(Strategy::random_with_seed(seed)) }
     }
 
     /// Resets the [`BackOff`] instance to its initial state.
@@ -82,7 +82,7 @@ impl BackOff {
     /// [`advise_yield`][BackOff::advise_yield] method.
     #[inline]
     pub fn spin(&self) {
-        let steps = self.strategy.borrow_mut().backoff_steps();
+        let steps = self.strategy.borrow_mut().exponential_backoff();
 
         // this uses a forced function call to prevent optimizing the loop away
         for _ in 0..steps {
@@ -132,7 +132,7 @@ impl BackOff {
     /// # Notes
     ///
     /// On an Intel(R) i5 with 2.60 GHz a full back-off cycle has been measured
-    /// to take approximately 500 nanoseconds
+    /// to take approximately 750 nanoseconds
     #[inline]
     pub fn advise_yield(&self) -> bool {
         self.strategy.borrow().advise_yield()
@@ -182,22 +182,22 @@ impl fmt::Display for BackOff {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// BackOffStrategy
+// Strategy
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Clone, Debug)]
-enum BackOffStrategy {
+enum Strategy {
     Const { pow: u32 },
     Random { pow: u32, rng: SmallRng },
 }
 
-impl BackOffStrategy {
+impl Strategy {
     const INIT_POW: u32 = 1;
     const SPIN_LIMIT_POW: u32 = 7;
 
     #[inline]
     const fn constant() -> Self {
-        BackOffStrategy::Const { pow: Self::INIT_POW }
+        Strategy::Const { pow: Self::INIT_POW }
     }
 
     #[inline]
@@ -211,18 +211,18 @@ impl BackOffStrategy {
         static GLOBAL_SEED: AtomicUsize = AtomicUsize::new(INIT_SEED);
         let seed = GLOBAL_SEED.fetch_add(SEED_INCREMENT, Ordering::Relaxed) as u64;
 
-        BackOffStrategy::Random { pow: Self::INIT_POW, rng: SmallRng::seed_from_u64(seed) }
+        Strategy::Random { pow: Self::INIT_POW, rng: SmallRng::seed_from_u64(seed) }
     }
 
     #[inline]
     fn random_with_seed(seed: u64) -> Self {
-        BackOffStrategy::Random { pow: Self::INIT_POW, rng: SmallRng::seed_from_u64(seed) }
+        Strategy::Random { pow: Self::INIT_POW, rng: SmallRng::seed_from_u64(seed) }
     }
 
     #[inline]
-    fn backoff_steps(&mut self) -> u32 {
+    fn exponential_backoff(&mut self) -> u32 {
         match self {
-            BackOffStrategy::Const { pow } => {
+            Strategy::Const { pow } => {
                 let steps = 1 << *pow;
 
                 if *pow < Self::SPIN_LIMIT_POW {
@@ -231,8 +231,7 @@ impl BackOffStrategy {
 
                 steps
             }
-            BackOffStrategy::Random { pow, rng } => {
-                debug_assert!(*pow >= 1);
+            Strategy::Random { pow, rng } => {
                 let low = 1 << (*pow - 1);
                 let high = 1 << *pow;
 
@@ -248,8 +247,8 @@ impl BackOffStrategy {
     #[inline]
     fn reset(&mut self) {
         let pow = match self {
-            BackOffStrategy::Const { pow } => pow,
-            BackOffStrategy::Random { pow, .. } => pow,
+            Strategy::Const { pow } => pow,
+            Strategy::Random { pow, .. } => pow,
         };
 
         *pow = Self::INIT_POW;
@@ -258,10 +257,39 @@ impl BackOffStrategy {
     #[inline]
     fn advise_yield(&self) -> bool {
         let pow = match self {
-            BackOffStrategy::Const { pow } => *pow,
-            BackOffStrategy::Random { pow, .. } => *pow,
+            Strategy::Const { pow } => *pow,
+            Strategy::Random { pow, .. } => *pow,
         };
 
         pow == Self::SPIN_LIMIT_POW
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BackOff, Strategy};
+
+    #[test]
+    fn spin_full_const() {
+        let backoff = BackOff::new();
+        let mut steps = 1;
+        while !backoff.advise_yield() {
+            backoff.spin();
+            steps += 1;
+        }
+
+        assert_eq!(steps, Strategy::SPIN_LIMIT_POW);
+    }
+
+    #[test]
+    fn spin_full_random() {
+        let backoff = BackOff::random();
+        let mut steps = 1;
+        while !backoff.advise_yield() {
+            backoff.spin();
+            steps += 1;
+        }
+
+        assert_eq!(steps, Strategy::SPIN_LIMIT_POW);
     }
 }
