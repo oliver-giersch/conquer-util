@@ -195,7 +195,7 @@ impl<'s, T> BoundedThreadLocal<'s, T> {
     ///
     /// let mut counter = Arc::try_unwrap(counter).unwrap();
     ///
-    /// let sum: usize = counter.iter().copied().sum();
+    /// let sum: usize = counter.iter().map(|c| *c).sum();
     /// assert_eq!(sum, (0..4).sum());
     /// ```
     #[inline]
