@@ -1,5 +1,6 @@
 [package]
 name = "conquer-util"
+description = "utilities for concurrent and lock-free programming"
 version = "0.1.0"
 authors = ["Oliver Giersch"]
 license = "MIT/Apache-2.0"
