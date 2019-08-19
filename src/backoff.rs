@@ -6,12 +6,12 @@
 #[cfg(feature = "std")]
 use std::time::{Duration, Instant};
 
-use core::cell::Cell;
+use core::cell::RefCell;
 use core::fmt;
-use core::hash::{Hash, Hasher};
-use core::sync::atomic;
+use core::sync::atomic::{self, AtomicUsize, Ordering};
 
-const SPIN_LIMIT_POW: u32 = 6;
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // BackOff
@@ -23,24 +23,46 @@ const SPIN_LIMIT_POW: u32 = 6;
 /// accessing shared variables in loops in order to reduce contention and
 /// improve performance for all participating threads by spinning for a short
 /// amount of time.
-#[derive(Clone, Default, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone)]
 pub struct BackOff {
-    pow: Cell<u32>,
+    strategy: RefCell<BackOffStrategy>,
+}
+
+/********** impl inherent *************************************************************************/
+
+impl Default for BackOff {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /********** impl inherent *************************************************************************/
 
 impl BackOff {
-    /// Creates a new [`BackOff`] instance.
+    /// Creates a new [`BackOff`] instance with a fixed exponential back-off
+    /// strategy.
     #[inline]
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new() -> Self {
+        Self { strategy: RefCell::new(BackOffStrategy::constant()) }
+    }
+
+    /// Creates a new [`BackOff`] instance with a randomize exponential back-off
+    /// strategy.
+    pub fn random() -> Self {
+        Self { strategy: RefCell::new(BackOffStrategy::random()) }
+    }
+
+    /// Creates a new [`BackOff`] instance with a randomize exponential back-off
+    /// strategy using the given `seed`.
+    pub fn random_with_seed(seed: u64) -> Self {
+        Self { strategy: RefCell::new(BackOffStrategy::random_with_seed(seed)) }
     }
 
     /// Resets the [`BackOff`] instance to its initial state.
     #[inline]
     pub fn reset(&self) {
-        self.pow.set(0);
+        self.strategy.borrow_mut().reset();
     }
 
     /// Spins for a bounded number of steps
@@ -60,21 +82,16 @@ impl BackOff {
     /// [`advise_yield`][BackOff::advise_yield] method.
     #[inline]
     pub fn spin(&self) {
-        let pow = self.pow.get();
-        let limit = 1 << pow;
+        let steps = self.strategy.borrow_mut().backoff_steps();
 
         // this uses a forced function call to prevent optimizing the loop away
-        for _ in 0..limit {
+        for _ in 0..steps {
             #[inline(never)]
             fn spin() {
                 atomic::spin_loop_hint();
             }
 
             spin();
-        }
-
-        if pow < SPIN_LIMIT_POW {
-            self.pow.set(pow + 1);
         }
     }
 
@@ -118,7 +135,7 @@ impl BackOff {
     /// to take approximately 500 nanoseconds
     #[inline]
     pub fn advise_yield(&self) -> bool {
-        self.pow.get() == SPIN_LIMIT_POW
+        self.strategy.borrow().advise_yield()
     }
 
     #[cfg(feature = "std")]
@@ -164,11 +181,87 @@ impl fmt::Display for BackOff {
     }
 }
 
-/********** impl Hash *****************************************************************************/
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// BackOffStrategy
+////////////////////////////////////////////////////////////////////////////////////////////////////
 
-impl Hash for BackOff {
+#[derive(Clone, Debug)]
+enum BackOffStrategy {
+    Const { pow: u32 },
+    Random { pow: u32, rng: SmallRng },
+}
+
+impl BackOffStrategy {
+    const INIT_POW: u32 = 1;
+    const SPIN_LIMIT_POW: u32 = 7;
+
     #[inline]
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u32(self.pow.get());
+    const fn constant() -> Self {
+        BackOffStrategy::Const { pow: Self::INIT_POW }
+    }
+
+    #[inline]
+    fn random() -> Self {
+        #[cfg(target_pointer_width = "32")]
+        const INIT_SEED: usize = 0x608c_dbfc;
+        #[cfg(target_pointer_width = "64")]
+        const INIT_SEED: usize = 0xd1dc_dceb_2fb4_70f3;
+        const SEED_INCREMENT: usize = 51;
+
+        static GLOBAL_SEED: AtomicUsize = AtomicUsize::new(INIT_SEED);
+        let seed = GLOBAL_SEED.fetch_add(SEED_INCREMENT, Ordering::Relaxed) as u64;
+
+        BackOffStrategy::Random { pow: Self::INIT_POW, rng: SmallRng::seed_from_u64(seed) }
+    }
+
+    #[inline]
+    fn random_with_seed(seed: u64) -> Self {
+        BackOffStrategy::Random { pow: Self::INIT_POW, rng: SmallRng::seed_from_u64(seed) }
+    }
+
+    #[inline]
+    fn backoff_steps(&mut self) -> u32 {
+        match self {
+            BackOffStrategy::Const { pow } => {
+                let steps = 1 << *pow;
+
+                if *pow < Self::SPIN_LIMIT_POW {
+                    *pow += 1;
+                }
+
+                steps
+            }
+            BackOffStrategy::Random { pow, rng } => {
+                debug_assert!(*pow >= 1);
+                let low = 1 << (*pow - 1);
+                let high = 1 << *pow;
+
+                if *pow < Self::SPIN_LIMIT_POW {
+                    *pow += 1;
+                }
+
+                rng.gen_range(low, high)
+            }
+        }
+    }
+
+    #[inline]
+    fn reset(&mut self) {
+        let pow = match self {
+            BackOffStrategy::Const { pow } => pow,
+            BackOffStrategy::Random { pow, .. } => pow,
+        };
+
+        *pow = Self::INIT_POW;
+    }
+
+    #[inline]
+    fn advise_yield(&self) -> bool {
+        let pow = match self {
+            BackOffStrategy::Const { pow } => *pow,
+            BackOffStrategy::Random { pow, .. } => *pow,
+        };
+
+        pow == Self::SPIN_LIMIT_POW
     }
 }

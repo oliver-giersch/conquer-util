@@ -25,6 +25,16 @@ fn spin_full(b: &mut Bencher) {
 }
 
 #[bench]
+fn spin_full_random(b: &mut Bencher) {
+    b.iter(|| {
+        let backoff = BackOff::random();
+        while !backoff.advise_yield() {
+            backoff.spin();
+        }
+    })
+}
+
+#[bench]
 fn spin_for(b: &mut Bencher) {
     b.iter(|| {
         use std::time::Duration;

@@ -11,8 +11,14 @@ std      = []
 
 align    = []
 alloc    = []
-back-off = []
+back-off = ["rand"]
 tls      = []
+
+[dependencies.rand]
+version = "0.7.0"
+optional = true
+default-features = false
+features = ["small_rng"]
 
 [[bench]]
 name = "backoff"
