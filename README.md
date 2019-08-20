@@ -8,7 +8,7 @@ https://travis-ci.org/oliver-giersch/conquer-util)
 [![Documentation](https://docs.rs/conquer-util/badge.svg)](https://docs.rs/conquer-util)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](
 https://github.com/oliver-giersch/conquer-util)
-[![Rust 1.36+](https://img.shields.io/badge/rust-1.33+-lightgray.svg)](
+[![Rust 1.36+](https://img.shields.io/badge/Rust-1.33.0-orange.svg)](
 https://www.rust-lang.org)
 
 ## Usage
@@ -17,7 +17,7 @@ Add this to your `Cargo.toml` and adjust the selected features as required.
 
 ```toml
 [dependencies.conquer-util]
-version = "0.1.0"
+version = "0.2.0"
 features = ["align", "back-off", "tls"]
 ```
 

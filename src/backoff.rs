@@ -10,7 +10,9 @@ use core::cell::RefCell;
 use core::fmt;
 use core::sync::atomic::{self, AtomicUsize, Ordering};
 
+#[cfg(feature = "random")]
 use rand::rngs::SmallRng;
+#[cfg(feature = "random")]
 use rand::{Rng, SeedableRng};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -47,12 +49,14 @@ impl BackOff {
         Self { strategy: RefCell::new(Strategy::constant()) }
     }
 
+    #[cfg(feature = "rand")]
     /// Creates a new [`BackOff`] instance with a randomized exponential
     /// back-off strategy.
     pub fn random() -> Self {
         Self { strategy: RefCell::new(Strategy::random()) }
     }
 
+    #[cfg(feature = "rand")]
     /// Creates a new [`BackOff`] instance with a randomized exponential
     /// back-off strategy using the given `seed`.
     pub fn random_with_seed(seed: u64) -> Self {
@@ -187,8 +191,14 @@ impl fmt::Display for BackOff {
 
 #[derive(Clone, Debug)]
 enum Strategy {
-    Const { pow: u32 },
-    Random { pow: u32, rng: SmallRng },
+    Const {
+        pow: u32,
+    },
+    #[cfg(feature = "random")]
+    Random {
+        pow: u32,
+        rng: SmallRng,
+    },
 }
 
 impl Strategy {
@@ -200,6 +210,7 @@ impl Strategy {
         Strategy::Const { pow: Self::INIT_POW }
     }
 
+    #[cfg(feature = "random")]
     #[inline]
     fn random() -> Self {
         #[cfg(target_pointer_width = "32")]
@@ -214,6 +225,7 @@ impl Strategy {
         Strategy::Random { pow: Self::INIT_POW, rng: SmallRng::seed_from_u64(seed) }
     }
 
+    #[cfg(feature = "random")]
     #[inline]
     fn random_with_seed(seed: u64) -> Self {
         Strategy::Random { pow: Self::INIT_POW, rng: SmallRng::seed_from_u64(seed) }
@@ -231,6 +243,7 @@ impl Strategy {
 
                 steps
             }
+            #[cfg(feature = "random")]
             Strategy::Random { pow, rng } => {
                 let low = 1 << (*pow - 1);
                 let high = 1 << *pow;
@@ -248,6 +261,7 @@ impl Strategy {
     fn reset(&mut self) {
         let pow = match self {
             Strategy::Const { pow } => pow,
+            #[cfg(feature = "random")]
             Strategy::Random { pow, .. } => pow,
         };
 
@@ -258,6 +272,7 @@ impl Strategy {
     fn advise_yield(&self) -> bool {
         let pow = match self {
             Strategy::Const { pow } => *pow,
+            #[cfg(feature = "random")]
             Strategy::Random { pow, .. } => *pow,
         };
 

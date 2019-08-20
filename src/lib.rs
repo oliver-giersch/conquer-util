@@ -39,6 +39,14 @@
 //! This type is `#![no_std]` compatible, but provides additional features when
 //! the `std` feature is also enabled.
 //!
+//! ### Randomized Exponential Back-Off
+//!
+//! Enabling the `random` feature in addition to the `back-off` feature pulls in
+//! the `rand` dependency and additionally adds `#![no_std]` compatible
+//! randomized exponential back-off, which adds some slight variations the time
+//! each thread spends spinning.
+//! This may help avoid issues such as *convoying*.
+//!
 //! ## TLS
 //!
 //! Enabling the `tls` feature makes the
