@@ -1,71 +1,65 @@
 //! Transparent thin wrapper types for artificially increasing the alignment of
 //! the wrapped type.
 
-#[cfg(arch = "x86_64")]
-pub use self::Aligned128 as CacheAligned;
-#[cfg(not(arch = "x86_64"))]
-pub use self::Aligned64 as CacheAligned;
-
 use core::borrow::{Borrow, BorrowMut};
-use core::ops::{Deref, DerefMut};
+use core::convert::{AsMut, AsRef};
 
 macro_rules! impl_align {
     ($(struct align($align:expr) $wrapper:ident; $comment:expr)*) => {
         $(
             #[doc = $comment]
-            #[derive(Copy, Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+            #[derive(Copy, Clone, Debug, Default, Hash, Eq, Ord, PartialEq, PartialOrd)]
             #[repr(align($align))]
-            pub struct $wrapper<T>(pub T);
+            pub struct $wrapper<T> {
+                /// The inner type that is aligned to the specified requirements.
+                pub aligned: T,
+            }
 
             impl<T> $wrapper<T> {
-                /// Returns a reference to the inner type.
+                /// Creates a new aligned value.
                 #[inline]
-                pub fn get(aligned: &Self) -> &T {
-                    &aligned.0
+                pub const fn new(aligned: T) -> Self {
+                    Self { aligned }
                 }
-            }
 
-            impl<T> Deref for $wrapper<T> {
-                type Target = T;
-
+                /// Returns a shared reference to the aligned value.
                 #[inline]
-                fn deref(&self) -> &Self::Target {
-                    &self.0
+                pub fn get(&self) -> &T {
+                    &self.aligned
                 }
-            }
 
-            impl<T> DerefMut for $wrapper<T> {
+                /// Returns a mutable reference to the aligned value.
                 #[inline]
-                fn deref_mut(&mut self) -> &mut Self::Target {
-                    &mut self.0
+                pub fn get_mut(&mut self) -> &mut T {
+                    &mut self.aligned
                 }
             }
 
             impl<T> AsRef<T> for $wrapper<T> {
                 #[inline]
                 fn as_ref(&self) -> &T {
-                    &self.0
+                    &self.aligned
                 }
             }
 
             impl<T> AsMut<T> for $wrapper<T> {
                 #[inline]
                 fn as_mut(&mut self) -> &mut T {
-                    &mut self.0
+                    &mut self.aligned
                 }
             }
 
             impl<T> Borrow<T> for $wrapper<T> {
                 #[inline]
                 fn borrow(&self) -> &T {
-                    &self.0
+                    &self.aligned
                 }
             }
 
             impl<T> BorrowMut<T> for $wrapper<T> {
                 #[inline]
                 fn borrow_mut(&mut self) -> &mut T {
-                    &mut self.0
+                    &mut self.aligned
                 }
             }
         )*
@@ -73,7 +67,6 @@ macro_rules! impl_align {
 }
 
 impl_align! {
-    struct align(1)          Aligned1;    "A thin wrapper type with an alignment of at least 1 bytes."
     struct align(2)          Aligned2;    "A thin wrapper type with an alignment of at least 2 bytes."
     struct align(4)          Aligned4;    "A thin wrapper type with an alignment of at least 4 bytes."
     struct align(8)          Aligned8;    "A thin wrapper type with an alignment of at least 8 bytes."
@@ -127,10 +120,10 @@ mod tests {
 
     #[test]
     fn construct_and_deref() {
-        let value = Aligned8(255u8);
-        assert_eq!(*value, 255);
+        let value = Aligned8::new(255u8);
+        assert_eq!(value.aligned, 255);
 
-        let value = CacheAligned(1u8);
-        assert_eq!(*value, 1);
+        let value = Aligned64::new(1u8);
+        assert_eq!(value.aligned, 1);
     }
 }
