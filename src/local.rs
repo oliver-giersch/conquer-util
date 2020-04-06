@@ -25,6 +25,7 @@ unsafe impl<T> Sync for BoundedThreadLocal<'_, T> {}
 
 /********** impl inherent *************************************************************************/
 
+#[cfg(any(feature = "alloc", feature = "std"))]
 impl<'s, T: Default> BoundedThreadLocal<'s, T> {
     /// Creates a new [`Default`] initialized [`BoundedThreadLocal`] that
     /// internally allocates a buffer of `max_size`.
@@ -32,25 +33,14 @@ impl<'s, T: Default> BoundedThreadLocal<'s, T> {
     /// # Panics
     ///
     /// This method panics, if `max_size` is 0.
-    #[cfg(feature = "alloc")]
     #[inline]
     pub fn new(max_threads: usize) -> Self {
         Self::with_init(max_threads, Default::default)
     }
 }
 
+#[cfg(any(feature = "alloc", feature = "std"))]
 impl<'s, T> BoundedThreadLocal<'s, T> {
-    /// Creates a new [`Default`] initialized [`BoundedThreadLocal`] that
-    /// borrows the specified `buffer`.
-    #[inline]
-    pub const fn with_buffer(buffer: &'s [Local<T>]) -> Self {
-        Self {
-            storage: Storage::Buffer(buffer),
-            registered: AtomicUsize::new(0),
-            completed: AtomicUsize::new(0),
-        }
-    }
-
     /// Creates a new [`BoundedThreadLocal`] that internally allocates a buffer
     /// of `max_size` and initializes each [`Local`] with `init`.
     ///
@@ -64,6 +54,19 @@ impl<'s, T> BoundedThreadLocal<'s, T> {
             storage: Storage::Heap(
                 (0..max_threads).map(|_| Local(UnsafeCell::new(Some(init())))).collect(),
             ),
+            registered: AtomicUsize::new(0),
+            completed: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl<'s, T> BoundedThreadLocal<'s, T> {
+    /// Creates a new [`Default`] initialized [`BoundedThreadLocal`] that
+    /// borrows the specified `buffer`.
+    #[inline]
+    pub const fn with_buffer(buffer: &'s [Local<T>]) -> Self {
+        Self {
+            storage: Storage::Buffer(buffer),
             registered: AtomicUsize::new(0),
             completed: AtomicUsize::new(0),
         }
@@ -265,50 +268,6 @@ impl<T> Drop for Token<'_, '_, T> {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// BoundsError
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-/// An Error for signalling than more than the specified maximum number of
-/// threads attempted to access a [`BoundedThreadLocal`].
-#[derive(Copy, Clone, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
-pub struct BoundsError(());
-
-/********** impl Display **************************************************************************/
-
-impl fmt::Display for BoundsError {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "exceeded bounds for `BoundedThreadLocal`")
-    }
-}
-
-/********** impl Error ****************************************************************************/
-
-#[cfg(feature = "std")]
-impl std::error::Error for BoundsError {}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// ConcurrentAccessErr
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-#[derive(Copy, Clone, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
-pub struct ConcurrentAccessErr(());
-
-/********** impl Display **************************************************************************/
-
-impl fmt::Display for ConcurrentAccessErr {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "concurrent access from live thread token (not all tokens have yet been dropped")
-    }
-}
-
-/********** impl Error ****************************************************************************/
-
-#[cfg(feature = "std")]
-impl std::error::Error for ConcurrentAccessErr {}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
 // Iter
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -399,6 +358,50 @@ impl<T> Iterator for IntoIter<'_, T> {
         }
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// BoundsError
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// An Error for signalling than more than the specified maximum number of
+/// threads attempted to access a [`BoundedThreadLocal`].
+#[derive(Copy, Clone, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+pub struct BoundsError(());
+
+/********** impl Display **************************************************************************/
+
+impl fmt::Display for BoundsError {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "exceeded bounds for `BoundedThreadLocal`")
+    }
+}
+
+/********** impl Error ****************************************************************************/
+
+#[cfg(feature = "std")]
+impl std::error::Error for BoundsError {}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// ConcurrentAccessErr
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Copy, Clone, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ConcurrentAccessErr(());
+
+/********** impl Display **************************************************************************/
+
+impl fmt::Display for ConcurrentAccessErr {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "concurrent access from live thread token (not all tokens have yet been dropped")
+    }
+}
+
+/********** impl Error ****************************************************************************/
+
+#[cfg(feature = "std")]
+impl std::error::Error for ConcurrentAccessErr {}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Storage
