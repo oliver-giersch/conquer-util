@@ -8,35 +8,6 @@ use core::ops::Index;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// Local
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-/// A wrapper for an instance of `T` that can be managed by a
-/// [`BoundedThreadLocal`].
-#[derive(Debug)]
-#[repr(align(128))]
-pub struct Local<T>(UnsafeCell<Option<T>>);
-
-/********** impl Default **************************************************************************/
-
-impl<T> Default for Local<T> {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/********** impl inherent *************************************************************************/
-
-impl<T> Local<T> {
-    /// Creates a new uninitialized [`Local`].
-    #[inline]
-    pub const fn new() -> Self {
-        Self(UnsafeCell::new(None))
-    }
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
 // BoundedThreadLocal
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -44,6 +15,7 @@ impl<T> Local<T> {
 pub struct BoundedThreadLocal<'s, T> {
     storage: Storage<'s, T>,
     registered: AtomicUsize,
+    completed: AtomicUsize,
 }
 
 /********** impl Send + Sync **********************************************************************/
@@ -51,58 +23,32 @@ pub struct BoundedThreadLocal<'s, T> {
 unsafe impl<T> Send for BoundedThreadLocal<'_, T> {}
 unsafe impl<T> Sync for BoundedThreadLocal<'_, T> {}
 
-/********** impl inherent (T: Default) ************************************************************/
+/********** impl inherent *************************************************************************/
 
 impl<'s, T: Default> BoundedThreadLocal<'s, T> {
-    /// Creates a new [`Default`] initialized [`BoundedThreadLocal`] that
-    /// borrows the specified `buffer`.
-    #[inline]
-    pub fn with_buffer(buffer: &'s [Local<T>]) -> Self {
-        Self::with_buffer_and_init(buffer, Default::default)
-    }
-
     /// Creates a new [`Default`] initialized [`BoundedThreadLocal`] that
     /// internally allocates a buffer of `max_size`.
     ///
     /// # Panics
     ///
     /// This method panics, if `max_size` is 0.
-    #[cfg(any(feature = "alloc", feature = "std"))]
+    #[cfg(feature = "alloc")]
     #[inline]
     pub fn new(max_threads: usize) -> Self {
         Self::with_init(max_threads, Default::default)
     }
 }
 
-/********** impl inherent *************************************************************************/
-
 impl<'s, T> BoundedThreadLocal<'s, T> {
-    /// Creates a new [`BoundedThreadLocal`] that borrows the specified
-    /// `buffer` and initializes each [`Local`] with `init`.
-    ///
-    /// If the the `buffer` has previously used by a [`BoundedThreadLocal`],
-    /// the previous values are dropped upon initialization.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use conquer_util::{BoundedThreadLocal, Local};
-    ///
-    /// let buf: [Local<i32>; 3] = [Local::new(), Local::new(), Local::new()];
-    /// let tls = BoundedThreadLocal::with_buffer_and_init(&buf, || -1);
-    ///
-    /// assert_eq!(tls.thread_token().unwrap().get(), &-1);
-    /// assert_eq!(tls.thread_token().unwrap().get(), &-1);
-    /// assert_eq!(tls.thread_token().unwrap().get(), &-1);
-    /// assert!(tls.thread_token().is_err());
-    /// ```
+    /// Creates a new [`Default`] initialized [`BoundedThreadLocal`] that
+    /// borrows the specified `buffer`.
     #[inline]
-    pub fn with_buffer_and_init(buffer: &'s [Local<T>], init: impl Fn() -> T) -> Self {
-        for local in buffer {
-            let slot = unsafe { &mut *local.0.get() };
-            *slot = Some(init());
+    pub const fn with_buffer(buffer: &'s [Local<T>]) -> Self {
+        Self {
+            storage: Storage::Buffer(buffer),
+            registered: AtomicUsize::new(0),
+            completed: AtomicUsize::new(0),
         }
-        Self { storage: Storage::Buffer(buffer), registered: AtomicUsize::new(0) }
     }
 
     /// Creates a new [`BoundedThreadLocal`] that internally allocates a buffer
@@ -118,7 +64,8 @@ impl<'s, T> BoundedThreadLocal<'s, T> {
             storage: Storage::Heap(
                 (0..max_threads).map(|_| Local(UnsafeCell::new(Some(init())))).collect(),
             ),
-            registered: Default::default(),
+            registered: AtomicUsize::new(0),
+            completed: AtomicUsize::new(0),
         }
     }
 
@@ -148,17 +95,27 @@ impl<'s, T> BoundedThreadLocal<'s, T> {
     /// # }
     /// ```
     #[inline]
-    pub fn thread_token(&self) -> Result<Token<'_, T>, BoundsError> {
+    pub fn thread_token(&self) -> Result<Token<'_, '_, T>, BoundsError> {
         let token: usize = self.registered.fetch_add(1, Ordering::Relaxed);
         assert!(token <= isize::max_value() as usize, "thread counter too close to overflow");
 
         if token < self.storage.len() {
-            let slot = &self.storage[token].0;
+            let &Local(ref slot) = &self.storage[token];
             let local = unsafe { (&mut *slot.get()).as_mut().unwrap_or_else(|| unreachable!()) };
 
-            Ok(Token { local, _marker: PhantomData })
+            Ok(Token { local, tls: self, _marker: PhantomData })
         } else {
             Err(BoundsError(()))
+        }
+    }
+
+    #[inline]
+    pub fn try_iter(&self) -> Result<Iter<T>, ConcurrentAccessErr> {
+        let (completed, len) = (self.completed.load(Ordering::Relaxed), self.storage.len());
+        if completed == len || completed == self.registered.load(Ordering::Relaxed) {
+            Ok(Iter { idx: 0, tls: self })
+        } else {
+            Err(ConcurrentAccessErr(()))
         }
     }
 
@@ -195,11 +152,11 @@ impl<'s, T> BoundedThreadLocal<'s, T> {
     ///
     /// let mut counter = Arc::try_unwrap(counter).unwrap();
     ///
-    /// let sum: usize = counter.iter().map(|c| *c).sum();
+    /// let sum: usize = counter.iter_mut().map(|c| *c).sum();
     /// assert_eq!(sum, (0..4).sum());
     /// ```
     #[inline]
-    pub fn iter(&mut self) -> IterMut<'s, '_, T> {
+    pub fn iter_mut(&mut self) -> IterMut<'s, '_, T> {
         IterMut { idx: 0, tls: self }
     }
 }
@@ -223,8 +180,33 @@ impl<T> fmt::Debug for BoundedThreadLocal<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("BoundedThreadLocal")
             .field("max_size", &self.storage.len())
-            .field("access_count", &self.registered.load(Ordering::SeqCst))
+            .field("access_count", &self.registered.load(Ordering::Relaxed))
             .finish()
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Local
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// A wrapper for an instance of `T` that can be managed by a
+/// [`BoundedThreadLocal`].
+#[derive(Debug, Default)]
+#[repr(align(128))]
+pub struct Local<T>(UnsafeCell<Option<T>>);
+
+/********** impl Send + Sync **********************************************************************/
+
+unsafe impl<T> Send for Local<T> {}
+unsafe impl<T> Sync for Local<T> {}
+
+/********** impl inherent *************************************************************************/
+
+impl<T> Local<T> {
+    /// Creates a new [`Local`].
+    #[inline]
+    pub const fn new(local: T) -> Self {
+        Self(UnsafeCell::new(Some(local)))
     }
 }
 
@@ -234,14 +216,15 @@ impl<T> fmt::Debug for BoundedThreadLocal<'_, T> {
 
 /// A thread local token granting unique access to an instance of `T` that is
 /// contained in a [`BoundedThreadLocal`]
-pub struct Token<'a, T> {
-    local: &'a mut T,
+pub struct Token<'s, 'tls, T> {
+    local: &'tls mut T,
+    tls: &'tls BoundedThreadLocal<'s, T>,
     _marker: PhantomData<*const ()>,
 }
 
 /********** impl inherent *************************************************************************/
 
-impl<'a, T> Token<'a, T> {
+impl<T> Token<'_, '_, T> {
     /// Returns a reference to the initialized thread local state.
     #[inline]
     pub fn get(&self) -> &T {
@@ -257,7 +240,7 @@ impl<'a, T> Token<'a, T> {
 
 /********** impl Debug ****************************************************************************/
 
-impl<'a, T: fmt::Debug> fmt::Debug for Token<'a, T> {
+impl<T: fmt::Debug> fmt::Debug for Token<'_, '_, T> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Token").field("slot", &self.get()).finish()
@@ -266,10 +249,18 @@ impl<'a, T: fmt::Debug> fmt::Debug for Token<'a, T> {
 
 /********** impl Display **************************************************************************/
 
-impl<'a, T: fmt::Display> fmt::Display for Token<'a, T> {
+impl<T: fmt::Display> fmt::Display for Token<'_, '_, T> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(&self.get(), f)
+    }
+}
+
+/********** impl Drop *****************************************************************************/
+
+impl<T> Drop for Token<'_, '_, T> {
+    fn drop(&mut self) {
+        self.tls.completed.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -279,17 +270,8 @@ impl<'a, T: fmt::Display> fmt::Display for Token<'a, T> {
 
 /// An Error for signalling than more than the specified maximum number of
 /// threads attempted to access a [`BoundedThreadLocal`].
-#[derive(Copy, Clone, Hash, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Copy, Clone, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
 pub struct BoundsError(());
-
-/********** impl Debug ****************************************************************************/
-
-impl fmt::Debug for BoundsError {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("BoundsError").finish()
-    }
-}
 
 /********** impl Display **************************************************************************/
 
@@ -306,20 +288,39 @@ impl fmt::Display for BoundsError {
 impl std::error::Error for BoundsError {}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// IterMut
+// ConcurrentAccessErr
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-/// A iterator that can be created from an unique reference to a
-/// [`BoundedThreadLocal`].
+#[derive(Copy, Clone, Debug, Hash, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ConcurrentAccessErr(());
+
+/********** impl Display **************************************************************************/
+
+impl fmt::Display for ConcurrentAccessErr {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "concurrent access from live thread token (not all tokens have yet been dropped")
+    }
+}
+
+/********** impl Error ****************************************************************************/
+
+#[cfg(feature = "std")]
+impl std::error::Error for ConcurrentAccessErr {}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Iter
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 #[derive(Debug)]
-pub struct IterMut<'s, 'tls, T> {
+pub struct Iter<'s, 'tls, T> {
     idx: usize,
-    tls: &'tls mut BoundedThreadLocal<'s, T>,
+    tls: &'tls BoundedThreadLocal<'s, T>,
 }
 
 /********** impl Iterator *************************************************************************/
 
-impl<'s, 'tls, T> Iterator for IterMut<'s, 'tls, T> {
+impl<'s, 'tls, T> Iterator for Iter<'s, 'tls, T> {
     type Item = &'tls T;
 
     #[inline]
@@ -331,6 +332,38 @@ impl<'s, 'tls, T> Iterator for IterMut<'s, 'tls, T> {
             let slot = unsafe { &*local.0.get() };
 
             Some(slot.as_ref().unwrap_or_else(|| unreachable!()))
+        } else {
+            None
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// IterMut
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// A iterator that can be created from an unique (mutable) reference to a
+/// [`BoundedThreadLocal`].
+#[derive(Debug)]
+pub struct IterMut<'s, 'tls, T> {
+    idx: usize,
+    tls: &'tls mut BoundedThreadLocal<'s, T>,
+}
+
+/********** impl Iterator *************************************************************************/
+
+impl<'s, 'tls, T> Iterator for IterMut<'s, 'tls, T> {
+    type Item = &'tls mut T;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let idx = self.idx;
+        if idx < self.tls.storage.len() {
+            self.idx += 1;
+            let local = &self.tls.storage[idx];
+            let slot = unsafe { &mut *local.0.get() };
+
+            Some(slot.as_mut().unwrap_or_else(|| unreachable!()))
         } else {
             None
         }
@@ -399,9 +432,9 @@ impl<T> Index<usize> for Storage<'_, T> {
     #[inline]
     fn index(&self, index: usize) -> &Self::Output {
         match self {
-            Storage::Buffer(slice) => &slice[index],
+            &Storage::Buffer(slice) => &slice[index],
             #[cfg(any(feature = "alloc", feature = "std"))]
-            Storage::Heap(boxed) => &boxed[index],
+            &Storage::Heap(ref boxed) => &boxed[index],
         }
     }
 }
@@ -412,6 +445,31 @@ mod tests {
     use std::thread;
 
     use super::BoundedThreadLocal;
+    use crate::Local;
+
+    #[test]
+    fn static_buffer() {
+        static BUF: [Local<usize>; 4] =
+            [Local::new(0), Local::new(0), Local::new(0), Local::new(0)];
+        static TLS: BoundedThreadLocal<usize> = BoundedThreadLocal::with_buffer(&BUF);
+
+        let handles: Vec<_> = (0..BUF.len())
+            .map(|_| {
+                thread::spawn(move || {
+                    let mut token = TLS.thread_token().unwrap();
+                    for _ in 0..10 {
+                        token.update(|curr| *curr += 1);
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        assert!(TLS.try_iter().unwrap().all(|&count| count == 10));
+    }
 
     #[test]
     fn into_iter() {
