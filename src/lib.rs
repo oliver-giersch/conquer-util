@@ -70,4 +70,4 @@ mod local;
 #[cfg(feature = "back-off")]
 pub use crate::backoff::BackOff;
 #[cfg(feature = "tls")]
-pub use crate::local::{BoundedThreadLocal, BoundsError, IntoIter, IterMut, Local, Token};
+pub use crate::local::{BoundedThreadLocal, BoundsError, IntoIter, Local, Token};

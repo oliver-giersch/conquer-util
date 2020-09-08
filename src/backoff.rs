@@ -11,9 +11,7 @@ use core::fmt;
 use core::sync::atomic::{self, AtomicUsize, Ordering};
 
 #[cfg(feature = "random")]
-use rand::rngs::SmallRng;
-#[cfg(feature = "random")]
-use rand::{Rng, SeedableRng};
+use rand::{rngs::SmallRng, Rng, SeedableRng};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // BackOff
@@ -58,9 +56,44 @@ impl BackOff {
 
     #[cfg(feature = "rand")]
     /// Creates a new [`BackOff`] instance with a randomized exponential
-    /// back-off strategy using the given `seed`.
+    /// back-off strategy using the given `seed` value.
     pub fn random_with_seed(seed: u64) -> Self {
         Self { strategy: RefCell::new(Strategy::random_with_seed(seed)) }
+    }
+
+    /// Spin once.
+    ///
+    /// This is a convenience wrapper for
+    /// [`spin_loop_hint`][core::sync::atomic::spin_loop_hint], but will never
+    /// compile to only a nop on platforms, that don't offer a `wait` like CPU
+    /// instruction, but will instead result in an empty function call.
+    #[inline(never)]
+    pub fn spin_once() {
+        atomic::spin_loop_hint();
+    }
+
+    #[cfg(feature = "std")]
+    /// Spins *at least* for the specified `dur`.
+    ///
+    /// If a very short duration is specified, this function may spin for a
+    /// longer, platform-specific minimum time.
+    pub fn spin_for(dur: Duration) {
+        let now = Instant::now();
+        let end = now + dur;
+
+        while Instant::now() < end {
+            Self::spin_once();
+        }
+    }
+
+    #[cfg(feature = "std")]
+    /// Cooperatively yields the current thread.
+    ///
+    /// This is a convenience wrapper for
+    /// [`thread::yield_now`][std::thread::yield_now]
+    #[inline]
+    pub fn yield_now() {
+        std::thread::yield_now();
     }
 
     /// Resets the [`BackOff`] instance to its initial state.
@@ -87,15 +120,8 @@ impl BackOff {
     #[inline]
     pub fn spin(&self) {
         let steps = self.strategy.borrow_mut().exponential_backoff();
-
-        // this uses a forced function call to prevent optimizing the loop away
         for _ in 0..steps {
-            #[inline(never)]
-            fn spin() {
-                atomic::spin_loop_hint();
-            }
-
-            spin();
+            Self::spin_once();
         }
     }
 
@@ -141,30 +167,6 @@ impl BackOff {
     pub fn advise_yield(&self) -> bool {
         self.strategy.borrow().advise_yield()
     }
-
-    #[cfg(feature = "std")]
-    /// Spins *at least* for the specified `dur`.
-    ///
-    /// If a very short duration is specified, this function may spin for a
-    /// longer, platform-specific minimum time.
-    pub fn spin_for(dur: Duration) {
-        let now = Instant::now();
-        let end = now + dur;
-
-        while Instant::now() < end {
-            atomic::spin_loop_hint();
-        }
-    }
-
-    #[cfg(feature = "std")]
-    /// Cooperatively yields the current thread.
-    ///
-    /// This is merely a convenience wrapper for
-    /// [`thread::yield_now`][std::thread::yield_now]
-    #[inline]
-    pub fn yield_now() {
-        std::thread::yield_now();
-    }
 }
 
 /********** impl Debug ****************************************************************************/
@@ -200,6 +202,8 @@ enum Strategy {
         rng: SmallRng,
     },
 }
+
+/********** impl inherent *************************************************************************/
 
 impl Strategy {
     const INIT_POW: u32 = 1;
