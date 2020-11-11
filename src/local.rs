@@ -94,19 +94,26 @@ impl<'s, T> BoundedThreadLocal<'s, T> {
 impl<'s, T> BoundedThreadLocal<'s, T> {
     /// Creates a new [`BoundedThreadLocal`] that is based on a separate `buffer`.
     ///
+    /// # Safety
+    ///
+    /// The given `buf` must be treated as if it were mutably, i.e. it **must
+    /// not** be used or otherwise accessed during the lifetime of the
+    /// [`BoundedThreadLocal`] that borrows it.
+    ///
     /// # Examples
     ///
     /// ```
-    /// use conquer_util::BoundedThreadLocal;
+    /// use conquer_util::{BoundedThreadLocal, Local};
     ///
-    /// static BUF: [Local<usize>] = [Local::new(0), Local::new(0), Local::new(0), Local::new(0)];
-    /// static TLS: BoundedThreadLocal<usize> = BoundedThreadLocal::with_buffer(&BUF);
+    /// static BUF: [Local<usize>; 4] =
+    ///     [Local::new(0), Local::new(0), Local::new(0), Local::new(0)];
+    /// static TLS: BoundedThreadLocal<usize> = unsafe { BoundedThreadLocal::with_buffer(&BUF) };
     /// assert_eq!(TLS.thread_token().unwrap().get(), &0);
     /// ```
     #[inline]
-    pub const fn with_buffer(buffer: &'s [Local<T>]) -> Self {
+    pub const unsafe fn with_buffer(buf: &'s [Local<T>]) -> Self {
         Self {
-            storage: Storage::Buffer(buffer),
+            storage: Storage::Buffer(buf),
             registered: AtomicUsize::new(0),
             completed: AtomicUsize::new(0),
         }
@@ -431,7 +438,7 @@ mod tests {
     fn static_buffer() {
         static BUF: [Local<usize>; 4] =
             [Local::new(0), Local::new(0), Local::new(0), Local::new(0)];
-        static TLS: BoundedThreadLocal<usize> = BoundedThreadLocal::with_buffer(&BUF);
+        static TLS: BoundedThreadLocal<usize> = unsafe { BoundedThreadLocal::with_buffer(&BUF) };
 
         let handles: Vec<_> = (0..BUF.len())
             .map(|_| {
