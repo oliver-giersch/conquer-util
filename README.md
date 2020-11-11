@@ -18,7 +18,7 @@ Add this to your `Cargo.toml` and adjust the selected features as required.
 ```toml
 [dependencies.conquer-util]
 version = "0.3.0"
-features = ["align", "back-off", "tls"] // enables all features
+features = ["align", "back-off", "tls"] # enables all features
 ```
 
 ## Minimum Supported Rust Version (MSRV)
