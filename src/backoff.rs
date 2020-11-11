@@ -131,7 +131,7 @@ impl BackOff {
     }
 }
 
-#[cfg(feature = "rand")]
+#[cfg(feature = "random")]
 impl BackOff {
     /// Creates a new [`BackOff`] instance with a randomized exponential
     /// back-off strategy.

@@ -1,0 +1,29 @@
+name: Rust
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+        rust: [stable, nightly, 1.36.0]
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build
+      run: cargo build --verbose --features align,back-off,random,tls
+    - name: Run tests
+      run: cargo test --verbose --features align,back-off,random,tls
+    - name: Build (w/o std feature)
+      run: cargo build --verbose --no-default-features --features align,back-off,random,tls
+    - name: Run tests (w/o std feature)
+      run: cargo test --verbose --no-default-features --features align,back-off,random,tls
