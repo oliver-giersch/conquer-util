@@ -56,7 +56,6 @@ unsafe impl<T> Sync for BoundedThreadLocal<'_, T> {}
 
 /********** impl inherent *************************************************************************/
 
-#[cfg(any(feature = "alloc", feature = "std"))]
 impl<'s, T: Default> BoundedThreadLocal<'s, T> {
     /// Creates a new [`Default`] initialized [`BoundedThreadLocal`] that
     /// internally allocates a buffer of `max_size`.
@@ -70,7 +69,6 @@ impl<'s, T: Default> BoundedThreadLocal<'s, T> {
     }
 }
 
-#[cfg(any(feature = "alloc", feature = "std"))]
 impl<'s, T> BoundedThreadLocal<'s, T> {
     /// Creates a new [`BoundedThreadLocal`] that internally allocates a buffer
     /// of `max_size` and initializes each [`Local`] with `init`.
@@ -136,7 +134,7 @@ impl<'s, T> BoundedThreadLocal<'s, T> {
     ///
     /// # fn main() -> Result<(), conquer_util::BoundsError> {
     ///
-    /// let tls = BoundedThreadLocal::<'_, usize>::new(1);
+    /// let tls = BoundedThreadLocal::<usize>::new(1);
     /// let mut token = tls.thread_token()?;
     /// *token.get_mut() += 1;
     /// assert_eq!(token.get(), &1);
@@ -394,7 +392,6 @@ impl std::error::Error for ConcurrentAccessErr {}
 #[derive(Debug)]
 enum Storage<'s, T> {
     Buffer(&'s [Local<T>]),
-    #[cfg(any(feature = "alloc", feature = "std"))]
     Heap(Box<[Local<T>]>),
 }
 
@@ -405,7 +402,6 @@ impl<T> Storage<'_, T> {
     fn len(&self) -> usize {
         match self {
             Storage::Buffer(slice) => slice.len(),
-            #[cfg(any(feature = "alloc", feature = "std"))]
             Storage::Heap(boxed) => boxed.len(),
         }
     }
@@ -420,7 +416,6 @@ impl<T> Index<usize> for Storage<'_, T> {
     fn index(&self, index: usize) -> &Self::Output {
         match self {
             &Storage::Buffer(slice) => &slice[index],
-            #[cfg(any(feature = "alloc", feature = "std"))]
             &Storage::Heap(ref boxed) => &boxed[index],
         }
     }
@@ -430,6 +425,7 @@ impl<T> Index<usize> for Storage<'_, T> {
 mod tests {
     extern crate std;
 
+    #[cfg(any(feature = "alloc", feature = "std"))]
     use std::sync::Arc;
     use std::thread;
     use std::vec::Vec;

@@ -21,7 +21,7 @@ align    = []
 alloc    = []
 back-off = []
 random   = ["back-off", "rand"]
-tls      = []
+tls      = ["alloc"]
 
 [dependencies.rand]
 version = "0.7.3"

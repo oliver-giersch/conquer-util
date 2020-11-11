@@ -25,6 +25,10 @@ jobs:
     - name: Run tests
       run: cargo test --verbose --features align,back-off,random,tls
     - name: Build (w/o std feature)
-      run: cargo build --verbose --no-default-features --features align,back-off,random,tls
+      run: cargo build --verbose --no-default-features --features alloc,align,back-off,random,tls
     - name: Run tests (w/o std feature)
+      run: cargo test --verbose --no-default-features --features alloc,align,back-off,random,tls
+    - name: Build (w/o alloc feature)
+      run: cargo build --verbose --no-default-features --features align,back-off,random,tls
+    - name: Run tests (w/o alloc feature)
       run: cargo test --verbose --no-default-features --features align,back-off,random,tls
