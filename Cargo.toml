@@ -10,7 +10,7 @@ documentation = "https://docs.rs/conquer-util"
 keywords = ["concurrent", "lock-free", "utilities"]
 categories = ["concurrency", "no-std"]
 edition = "2018"
-exclude = [".travis.yml"]
+exclude = [".github/"]
 
 [features]
 default  = ["std"]
