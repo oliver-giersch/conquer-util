@@ -95,7 +95,7 @@ impl_align! {
     struct align(0x4000000)  Aligned64M;  "A thin wrapper type with an alignment of at least 64MB."
     struct align(0x8000000)  Aligned128M; "A thin wrapper type with an alignment of at least 128MB."
     struct align(0x10000000) Aligned256M; "A thin wrapper type with an alignment of at least 256MB."
-    struct align(0x10000000) Aligned512M; "A thin wrapper type with an alignment of at least 512MB."
+    struct align(0x20000000) Aligned512M; "A thin wrapper type with an alignment of at least 512MB."
 }
 
 #[cfg(test)]
