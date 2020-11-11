@@ -100,7 +100,7 @@ impl_align! {
 
 #[cfg(test)]
 mod tests {
-    use std::mem;
+    use core::mem;
 
     use super::*;
 

@@ -428,8 +428,11 @@ impl<T> Index<usize> for Storage<'_, T> {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use std::sync::Arc;
     use std::thread;
+    use std::vec::Vec;
 
     use super::BoundedThreadLocal;
     use crate::Local;

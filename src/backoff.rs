@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 
 use core::cell::RefCell;
 use core::fmt;
-use core::sync::atomic::{self, AtomicUsize, Ordering};
+use core::sync::atomic;
+#[cfg(feature = "random")]
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(feature = "random")]
 use rand::{rngs::SmallRng, Rng, SeedableRng};
@@ -114,7 +116,7 @@ impl BackOff {
     /// let mut backoff = BackOff::new();
     /// while !cond {
     ///     if backoff.advise_yield() {
-    ///         BackOff::yield_now();
+    ///         std::thread::yield_now();
     ///     } else {
     ///         backoff.spin();
     ///     }
@@ -303,6 +305,7 @@ mod tests {
         assert_eq!(steps, Strategy::SPIN_LIMIT_POW);
     }
 
+    #[cfg(feature = "random")]
     #[test]
     fn spin_full_random() {
         let backoff = BackOff::random();
