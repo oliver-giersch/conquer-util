@@ -47,53 +47,15 @@ impl BackOff {
         Self { strategy: RefCell::new(Strategy::constant()) }
     }
 
-    #[cfg(feature = "rand")]
-    /// Creates a new [`BackOff`] instance with a randomized exponential
-    /// back-off strategy.
-    pub fn random() -> Self {
-        Self { strategy: RefCell::new(Strategy::random()) }
-    }
-
-    #[cfg(feature = "rand")]
-    /// Creates a new [`BackOff`] instance with a randomized exponential
-    /// back-off strategy using the given `seed` value.
-    pub fn random_with_seed(seed: u64) -> Self {
-        Self { strategy: RefCell::new(Strategy::random_with_seed(seed)) }
-    }
-
     /// Spin once.
     ///
     /// This is a convenience wrapper for
     /// [`spin_loop_hint`][core::sync::atomic::spin_loop_hint], but will never
-    /// compile to only a nop on platforms, that don't offer a `wait` like CPU
+    /// compile to only a nop on platforms, that don't offer a `wait`-like CPU
     /// instruction, but will instead result in an empty function call.
     #[inline(never)]
     pub fn spin_once() {
         atomic::spin_loop_hint();
-    }
-
-    #[cfg(feature = "std")]
-    /// Spins *at least* for the specified `dur`.
-    ///
-    /// If a very short duration is specified, this function may spin for a
-    /// longer, platform-specific minimum time.
-    pub fn spin_for(dur: Duration) {
-        let now = Instant::now();
-        let end = now + dur;
-
-        while Instant::now() < end {
-            Self::spin_once();
-        }
-    }
-
-    #[cfg(feature = "std")]
-    /// Cooperatively yields the current thread.
-    ///
-    /// This is a convenience wrapper for
-    /// [`thread::yield_now`][std::thread::yield_now]
-    #[inline]
-    pub fn yield_now() {
-        std::thread::yield_now();
     }
 
     /// Resets the [`BackOff`] instance to its initial state.
@@ -169,6 +131,46 @@ impl BackOff {
     }
 }
 
+#[cfg(feature = "rand")]
+impl BackOff {
+    /// Creates a new [`BackOff`] instance with a randomized exponential
+    /// back-off strategy.
+    pub fn random() -> Self {
+        Self { strategy: RefCell::new(Strategy::random()) }
+    }
+
+    /// Creates a new [`BackOff`] instance with a randomized exponential
+    /// back-off strategy using the given `seed` value.
+    pub fn random_with_seed(seed: u64) -> Self {
+        Self { strategy: RefCell::new(Strategy::random_with_seed(seed)) }
+    }
+}
+
+#[cfg(feature = "std")]
+impl BackOff {
+    /// Spins *at least* for the specified `dur`.
+    ///
+    /// If a very short duration is specified, this function may spin for a
+    /// longer, platform-specific minimum time.
+    pub fn spin_for(dur: Duration) {
+        let now = Instant::now();
+        let end = now + dur;
+
+        while Instant::now() < end {
+            Self::spin_once();
+        }
+    }
+
+    /// Cooperatively yields the current thread.
+    ///
+    /// This is a convenience wrapper for
+    /// [`thread::yield_now`][std::thread::yield_now]
+    #[inline]
+    pub fn yield_now() {
+        std::thread::yield_now();
+    }
+}
+
 /********** impl Debug ****************************************************************************/
 
 impl fmt::Debug for BackOff {
@@ -212,27 +214,6 @@ impl Strategy {
     #[inline]
     const fn constant() -> Self {
         Strategy::Const { pow: Self::INIT_POW }
-    }
-
-    #[cfg(feature = "random")]
-    #[inline]
-    fn random() -> Self {
-        #[cfg(target_pointer_width = "32")]
-        const INIT_SEED: usize = 0x608c_dbfc;
-        #[cfg(target_pointer_width = "64")]
-        const INIT_SEED: usize = 0xd1dc_dceb_2fb4_70f3;
-        const SEED_INCREMENT: usize = 51;
-
-        static GLOBAL_SEED: AtomicUsize = AtomicUsize::new(INIT_SEED);
-        let seed = GLOBAL_SEED.fetch_add(SEED_INCREMENT, Ordering::Relaxed) as u64;
-
-        Strategy::Random { pow: Self::INIT_POW, rng: SmallRng::seed_from_u64(seed) }
-    }
-
-    #[cfg(feature = "random")]
-    #[inline]
-    fn random_with_seed(seed: u64) -> Self {
-        Strategy::Random { pow: Self::INIT_POW, rng: SmallRng::seed_from_u64(seed) }
     }
 
     #[inline]
@@ -281,6 +262,28 @@ impl Strategy {
         };
 
         pow == Self::SPIN_LIMIT_POW
+    }
+}
+
+#[cfg(feature = "random")]
+impl Strategy {
+    #[inline]
+    fn random() -> Self {
+        #[cfg(target_pointer_width = "32")]
+        const INIT_SEED: usize = 0x608c_dbfc;
+        #[cfg(target_pointer_width = "64")]
+        const INIT_SEED: usize = 0xd1dc_dceb_2fb4_70f3;
+        const SEED_INCREMENT: usize = 51;
+
+        static GLOBAL_SEED: AtomicUsize = AtomicUsize::new(INIT_SEED);
+        let seed = GLOBAL_SEED.fetch_add(SEED_INCREMENT, Ordering::Relaxed) as u64;
+
+        Strategy::Random { pow: Self::INIT_POW, rng: SmallRng::seed_from_u64(seed) }
+    }
+
+    #[inline]
+    fn random_with_seed(seed: u64) -> Self {
+        Strategy::Random { pow: Self::INIT_POW, rng: SmallRng::seed_from_u64(seed) }
     }
 }
 
